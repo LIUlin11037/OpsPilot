@@ -33,6 +33,7 @@ _HTTP_FAILURES: dict[int, FailureReason] = {
 class RabbitMQUnavailableEvidence(UnavailableEvidence):
     reason: FailureReason
     http_status: int | None
+    registered_consumers: int | None
 
 
 def _path_segment(name: str) -> str:
@@ -76,7 +77,10 @@ class RabbitMQQueueConnector:
         source = urlunsplit((base.scheme, base.netloc, path, "", ""))
 
         def unavailable(
-            reason: FailureReason, status: int | None = None
+            reason: FailureReason,
+            status: int | None = None,
+            *,
+            registered_consumers: int | None = None,
         ) -> RabbitMQUnavailableEvidence:
             return {
                 "tool": "inspect_queue",
@@ -85,6 +89,7 @@ class RabbitMQQueueConnector:
                 "outcome": "timeout" if reason == "request_timeout" else "missing",
                 "reason": reason,
                 "http_status": status,
+                "registered_consumers": registered_consumers,
             }
 
         credentials = b64encode(f"{self.username}:{self.password}".encode()).decode("ascii")
@@ -117,11 +122,20 @@ class RabbitMQQueueConnector:
 
         if not isinstance(data, dict):
             return unavailable("invalid_response", 200)
+
+        registered = data.get("consumers")
+        registered_consumers = (
+            registered if type(registered) is int and registered >= 0 else None
+        )
         pending_messages = data.get("messages_ready")
         if pending_messages is None:
-            return unavailable("metric_missing", 200)
+            return unavailable(
+                "metric_missing", 200, registered_consumers=registered_consumers
+            )
         if type(pending_messages) is not int or pending_messages < 0:
-            return unavailable("invalid_response", 200)
+            return unavailable(
+                "invalid_response", 200, registered_consumers=registered_consumers
+            )
 
         return {
             "tool": "inspect_queue",
@@ -129,5 +143,6 @@ class RabbitMQQueueConnector:
             "observed_at": datetime.now(timezone.utc).isoformat(),
             "outcome": "observed",
             "pending_messages": pending_messages,
+            "registered_consumers": registered_consumers,
             "sampled_pending_message_ids": [],
         }

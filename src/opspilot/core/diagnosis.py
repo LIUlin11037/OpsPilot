@@ -20,11 +20,15 @@ class Observation(TypedDict):
     observed_at: str
 
 
-class QueueEvidence(Observation):
+class QueueEvidenceFields(Observation):
     tool: Literal["inspect_queue"]
     outcome: Literal["observed"]
     pending_messages: int
     sampled_pending_message_ids: list[str]
+
+
+class QueueEvidence(QueueEvidenceFields, total=False):
+    registered_consumers: int | None
 
 
 class ConsumerEvidence(Observation):
@@ -135,9 +139,16 @@ def _conclude(
     consumer = state.get("consumer")
     if consumer is None:
         if queue["pending_messages"] > 0:
+            registered = queue.get("registered_consumers")
+            if registered is None:
+                registration = "The registered consumer count is unavailable."
+            else:
+                registration = (
+                    f"The broker reports a registered consumer count of {registered}."
+                )
             return "undetermined", (
-                "The queue has pending messages. The cause remains undetermined "
-                "from queue metrics alone."
+                "The queue has pending messages. "
+                f"{registration} The cause of the backlog is undetermined."
             )
         return "no_backlog_observed", "No pending messages were observed in the queue."
 

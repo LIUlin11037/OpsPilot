@@ -68,9 +68,11 @@ def _cli(*arguments: str, cwd: str | None = None) -> subprocess.CompletedProcess
     )
 
 
-@pytest.mark.parametrize("pending", [0, 3])
-def test_reads_ready_count_using_encoded_queue_path(pending: int) -> None:
-    body = json.dumps({"messages": 12, "messages_ready": pending}).encode()
+@pytest.mark.parametrize(("pending", "registered"), [(0, 0), (3, 2)])
+def test_reads_metrics_using_encoded_queue_path(pending: int, registered: int) -> None:
+    body = json.dumps(
+        {"messages": 12, "messages_ready": pending, "consumers": registered}
+    ).encode()
 
     with _management_api(body) as (url, requests):
         evidence = RabbitMQQueueConnector(
@@ -82,6 +84,7 @@ def test_reads_ready_count_using_encoded_queue_path(pending: int) -> None:
     assert requests == [(path, f"Basic {authorization}")]
     assert evidence["outcome"] == "observed"
     assert evidence["pending_messages"] == pending
+    assert evidence["registered_consumers"] == registered
     assert evidence["sampled_pending_message_ids"] == []
     assert evidence["source"] == f"{url}{path}"
     assert datetime.fromisoformat(evidence["observed_at"]).utcoffset() == timedelta(0)
@@ -129,6 +132,27 @@ def test_missing_or_malformed_counts_stay_unknown(body: bytes, reason: str) -> N
     assert "pending_messages" not in result
 
 
+@pytest.mark.parametrize("registered", [None, -1, True, "2"])
+def test_unusable_consumer_count_preserves_pending_count(registered: object) -> None:
+    body = json.dumps({"messages_ready": 7, "consumers": registered}).encode()
+    with _management_api(body) as (url, _requests):
+        result = RabbitMQQueueConnector(url, "orders", "reader", "test-pass").inspect_queue()
+
+    assert result["outcome"] == "observed"
+    assert result["pending_messages"] == 7
+    assert result["registered_consumers"] is None
+
+
+def test_missing_depth_preserves_registered_consumer_count() -> None:
+    with _management_api(b'{"consumers": 2}') as (url, _requests):
+        result = RabbitMQQueueConnector(url, "orders", "reader", "test-pass").inspect_queue()
+
+    assert result["outcome"] == "missing"
+    assert result["reason"] == "metric_missing"
+    assert result["registered_consumers"] == 2
+    assert "pending_messages" not in result
+
+
 def test_socket_timeout_is_reported_separately() -> None:
     with _management_api(b"", stall=True) as (url, _requests):
         connector = RabbitMQQueueConnector(
@@ -160,17 +184,26 @@ def test_inspect_queue_cli(status: int, exit_code: int, outcome: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("http_status", "pending", "diagnosis_status", "outcome"),
+    ("http_status", "pending", "registered", "diagnosis_status", "outcome"),
     [
-        (200, 0, "no_backlog_observed", "observed"),
-        (200, 7, "undetermined", "observed"),
-        (403, 0, "undetermined", "missing"),
+        (200, 0, 0, "no_backlog_observed", "observed"),
+        (200, 7, 0, "undetermined", "observed"),
+        (200, 7, 2, "undetermined", "observed"),
+        (200, 7, None, "undetermined", "observed"),
+        (403, 0, None, "undetermined", "missing"),
     ],
 )
 def test_rabbitmq_diagnosis_saves_queue_evidence(
-    http_status: int, pending: int, diagnosis_status: str, outcome: str
+    http_status: int,
+    pending: int,
+    registered: int | None,
+    diagnosis_status: str,
+    outcome: str,
 ) -> None:
-    body = json.dumps({"messages_ready": pending}).encode()
+    metrics = {"messages_ready": pending}
+    if registered is not None:
+        metrics["consumers"] = registered
+    body = json.dumps(metrics).encode()
     with TemporaryDirectory(prefix="opspilot-rabbitmq-test-") as directory:
         with _management_api(body, status=http_status) as (url, requests):
             result = _cli(
@@ -195,8 +228,15 @@ def test_rabbitmq_diagnosis_saves_queue_evidence(
     call, = report["tool_calls"]
     assert call["tool"] == evidence["tool"] == "inspect_queue"
     assert call["outcome"] == evidence["outcome"] == outcome
+    assert evidence["registered_consumers"] == registered
     if outcome == "observed":
         assert evidence["pending_messages"] == pending
     else:
         assert evidence["reason"] == "access_denied"
         assert "pending_messages" not in evidence
+
+    if pending > 0:
+        if registered is None:
+            assert "registered consumer count is unavailable" in report["conclusion"]
+        else:
+            assert f"registered consumer count of {registered}" in report["conclusion"]

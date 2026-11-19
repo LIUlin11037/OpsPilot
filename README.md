@@ -59,7 +59,7 @@ JSON 报告包含任务 ID、用户提交的问题、诊断状态和结论。每
 .\.venv\Scripts\python.exe -m opspilot inspect-queue --management-url http://127.0.0.1:15672 --vhost "/" --queue "orders"
 ```
 
-`inspect-queue` 将单个队列的 `messages_ready` 映射为 `pending_messages`，表示等待投递的消息数。查询只读取队列指标，因此消息 ID 样本为空。命令直接输出一条证据；超时、鉴权失败或缺少指标等情况会附带失败原因，并以状态码 1 退出。 [RabbitMQ 队列指标文档](https://www.rabbitmq.com/docs/monitoring#individual-queue-metrics)
+`inspect-queue` 将单个队列的 `messages_ready` 映射为 `pending_messages`，将同一次响应中的 `consumers` 映射为 `registered_consumers`。缺失或无效的注册数记为 `null`，有效的零值保留为 `0`。查询只读取队列指标，消息 ID 样本为空。待投递数不可用时，命令输出失败原因并以状态码 1 退出，同时保留可用的注册数。 [RabbitMQ 队列指标文档](https://www.rabbitmq.com/docs/monitoring#individual-queue-metrics) · [消费者指标定义](https://www.rabbitmq.com/docs/man/rabbitmqctl.8#consumers)
 
 将相同的连接参数传给 `diagnose`，可以把这条队列观测纳入诊断报告并保存任务 ID。
 
@@ -67,4 +67,4 @@ JSON 报告包含任务 ID、用户提交的问题、诊断状态和结论。每
 .\.venv\Scripts\python.exe -m opspilot diagnose --management-url http://127.0.0.1:15672 --queue "orders" "这个队列有积压吗？"
 ```
 
-RabbitMQ 模式的调查范围是队列指标。待投递数大于零或指标不可用时，报告给出 `undetermined`，并保留读取结果及耗时。
+RabbitMQ 模式保留队列证据及读取耗时。发现积压时，结论会写明 broker 报告的注册数或该指标不可用。注册数反映队列订阅情况，积压原因仍标为 `undetermined`。
