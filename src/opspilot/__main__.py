@@ -2,10 +2,12 @@
 
 import argparse
 import json
+import os
 import sqlite3
 from pathlib import Path
 
 from opspilot.adapters.simulated import SimulatedProcessingAdapter
+from opspilot.connectors.rabbitmq import RabbitMQQueueConnector
 from opspilot.connectors.simulated import SimulatedQueueConnector
 from opspilot.core.diagnosis import run_diagnosis
 from opspilot.core.startup import run_startup
@@ -59,11 +61,40 @@ def main() -> None:
     diagnose.add_argument("question", help="Incident description.")
     report_command = commands.add_parser("report", help="Show a saved report.")
     report_command.add_argument("task_id", help="Task ID returned by diagnose.")
+    inspect_queue = commands.add_parser(
+        "inspect-queue", help="Read queue metrics from RabbitMQ Management."
+    )
+    inspect_queue.add_argument("--management-url", required=True)
+    inspect_queue.add_argument("--queue", required=True)
+    inspect_queue.add_argument("--vhost", default="/")
+    inspect_queue.add_argument("--timeout", type=float, default=5.0, metavar="SECONDS")
     args = parser.parse_args()
 
     if args.command is None:
         state = run_startup()
         print(f"OpsPilot is {state['status']}.")
+        return
+
+    if args.command == "inspect-queue":
+        username = os.getenv("OPSPILOT_RABBITMQ_USER")
+        password = os.getenv("OPSPILOT_RABBITMQ_PASSWORD")
+        if username is None or password is None:
+            inspect_queue.error("set OPSPILOT_RABBITMQ_USER and OPSPILOT_RABBITMQ_PASSWORD")
+        connector = RabbitMQQueueConnector(
+            management_url=args.management_url,
+            queue=args.queue,
+            username=username,
+            password=password,
+            vhost=args.vhost,
+            timeout_seconds=args.timeout,
+        )
+        try:
+            evidence = connector.inspect_queue()
+        except ValueError as error:
+            inspect_queue.error(str(error))
+        print(json.dumps(evidence, indent=2))
+        if evidence["outcome"] != "observed":
+            parser.exit(1)
         return
 
     try:

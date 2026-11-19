@@ -50,3 +50,13 @@ JSON 报告包含任务 ID、用户提交的问题、诊断状态和结论。每
 ```
 
 如需指定数据库路径，在子命令前加 `--db PATH`。诊断和查询时使用同一路径。
+
+## 只读查询 RabbitMQ 队列
+
+在已启用 Management API 的 RabbitMQ 环境中，将查询凭据提供给进程的 `OPSPILOT_RABBITMQ_USER` 和 `OPSPILOT_RABBITMQ_PASSWORD` 环境变量。以下命令使用本机地址和默认虚拟主机。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot inspect-queue --management-url http://127.0.0.1:15672 --vhost "/" --queue "orders"
+```
+
+`inspect-queue` 将单个队列的 `messages_ready` 映射为 `pending_messages`，表示等待投递的消息数。查询只读取队列指标，因此消息 ID 样本为空。命令直接输出一条证据；超时、鉴权失败或缺少指标等情况会附带失败原因，并以状态码 1 退出。 [RabbitMQ 队列指标文档](https://www.rabbitmq.com/docs/monitoring#individual-queue-metrics)
