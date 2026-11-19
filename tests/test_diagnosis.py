@@ -47,6 +47,7 @@ def test_cli_diagnoses_simulated_queue(
 
     assert report["status"] == status
     assert report["conclusion"]
+    assert report["processing_correlation"] is None
     queue, *remaining = report["evidence"]
     assert queue["tool"] == "inspect_queue"
     assert queue["source"] == "simulated:queue"
@@ -89,15 +90,37 @@ def test_missing_consumer_data_preserves_observed_backlog() -> None:
     assert "running" not in consumer
 
 
-def test_cli_reports_failed_processing_as_evidence() -> None:
-    report = _diagnose_from_cli("processing-failed")
+@pytest.mark.parametrize(
+    ("scenario", "correlation", "message_id", "explanation"),
+    [
+        (
+            "processing-failed",
+            "matched",
+            "msg-101",
+            "Its message ID matches a sampled pending message.",
+        ),
+        (
+            "processing-failed-outside-sample",
+            "not_in_sample",
+            "msg-099",
+            "Its message ID was absent from the pending-message sample.",
+        ),
+    ],
+)
+def test_cli_correlates_failed_processing_with_sample(
+    scenario: str, correlation: str, message_id: str, explanation: str
+) -> None:
+    report = _diagnose_from_cli(scenario)
 
     assert report["status"] == "undetermined"
+    assert report["processing_correlation"] == correlation
     assert "The latest processing attempt failed." in report["conclusion"]
+    assert explanation in report["conclusion"]
     queue, consumer, processing = report["evidence"]
     assert queue["tool"] == "inspect_queue"
     assert queue["outcome"] == "observed"
     assert queue["pending_messages"] == 3
+    assert queue["sampled_pending_message_ids"] == ["msg-101", "msg-102"]
     assert consumer["tool"] == "inspect_consumer"
     assert consumer["outcome"] == "observed"
     assert consumer["running"] is True
@@ -105,6 +128,7 @@ def test_cli_reports_failed_processing_as_evidence() -> None:
     assert processing["source"] == "simulated:processing"
     assert processing["outcome"] == "observed"
     assert processing["result"] == "failed"
+    assert processing["message_id"] == message_id
 
 
 @pytest.mark.parametrize(
@@ -126,6 +150,7 @@ def test_processing_evidence_preserves_uncertainty(
     report = run_diagnosis("Messages are stuck in the queue", tools, adapter)
 
     assert report["status"] == "undetermined"
+    assert report["processing_correlation"] == "unknown"
     assert explanation in report["conclusion"]
     assert [evidence["tool"] for evidence in report["evidence"]] == [
         "inspect_queue",
@@ -136,3 +161,24 @@ def test_processing_evidence_preserves_uncertainty(
     assert processing["outcome"] == outcome
     if processing["outcome"] != "observed":
         assert "result" not in processing
+
+
+@pytest.mark.parametrize(
+    ("sampled_ids", "message_id"),
+    [((), "msg-101"), (("msg-101",), None)],
+)
+def test_correlation_is_unknown_when_an_id_is_unavailable(
+    sampled_ids: tuple[str, ...], message_id: str | None
+) -> None:
+    tools = SimulatedQueueConnector(
+        pending_messages=3,
+        consumer_running=True,
+        sampled_pending_message_ids=sampled_ids,
+    )
+    adapter = SimulatedProcessingAdapter(latest_result="failed", message_id=message_id)
+
+    report = run_diagnosis("Messages are stuck in the queue", tools, adapter)
+
+    assert report["status"] == "undetermined"
+    assert report["processing_correlation"] == "unknown"
+    assert "Message correlation is unknown." in report["conclusion"]

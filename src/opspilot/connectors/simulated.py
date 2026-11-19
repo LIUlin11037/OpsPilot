@@ -16,6 +16,7 @@ from opspilot.core.diagnosis import (
 class SimulatedQueueConnector:
     pending_messages: int | UnavailableOutcome
     consumer_running: bool | UnavailableOutcome
+    sampled_pending_message_ids: tuple[str, ...] = ()
 
     def inspect_queue(self) -> QueueEvidence | UnavailableEvidence:
         observation: Observation = {
@@ -31,6 +32,7 @@ class SimulatedQueueConnector:
             "tool": "inspect_queue",
             "outcome": "observed",
             "pending_messages": pending_messages,
+            "sampled_pending_message_ids": list(self.sampled_pending_message_ids),
         }
 
     def inspect_consumer(self) -> ConsumerEvidence | UnavailableEvidence:

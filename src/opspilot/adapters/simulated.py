@@ -15,6 +15,7 @@ from opspilot.core.diagnosis import (
 @dataclass(frozen=True)
 class SimulatedProcessingAdapter:
     latest_result: ProcessingResult | UnavailableOutcome = "missing"
+    message_id: str | None = None
 
     def inspect_processing(self) -> ProcessingEvidence | UnavailableEvidence:
         observation: Observation = {
@@ -30,4 +31,5 @@ class SimulatedProcessingAdapter:
             "tool": "inspect_processing",
             "outcome": "observed",
             "result": result,
+            "message_id": self.message_id,
         }

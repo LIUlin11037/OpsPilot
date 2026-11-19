@@ -6,6 +6,7 @@ from langgraph.graph import END, START, StateGraph
 
 UnavailableOutcome = Literal["timeout", "missing"]
 ProcessingResult = Literal["succeeded", "failed"]
+ProcessingCorrelation = Literal["matched", "not_in_sample", "unknown"]
 DiagnosisStatus = Literal["no_backlog_observed", "consumer_stopped", "undetermined"]
 
 
@@ -18,6 +19,7 @@ class QueueEvidence(Observation):
     tool: Literal["inspect_queue"]
     outcome: Literal["observed"]
     pending_messages: int
+    sampled_pending_message_ids: list[str]
 
 
 class ConsumerEvidence(Observation):
@@ -30,6 +32,7 @@ class ProcessingEvidence(Observation):
     tool: Literal["inspect_processing"]
     outcome: Literal["observed"]
     result: ProcessingResult
+    message_id: str | None
 
 
 class UnavailableEvidence(Observation):
@@ -51,6 +54,7 @@ class DiagnosisReport(TypedDict):
     question: str
     status: DiagnosisStatus
     conclusion: str
+    processing_correlation: ProcessingCorrelation | None
     evidence: list[
         QueueEvidence | ConsumerEvidence | ProcessingEvidence | UnavailableEvidence
     ]
@@ -85,7 +89,25 @@ def _describe_failure(outcome: UnavailableOutcome) -> str:
     return "timed out" if outcome == "timeout" else "returned no data"
 
 
-def _conclude(state: DiagnosisState) -> tuple[DiagnosisStatus, str]:
+def _correlate_processing(
+    queue: QueueEvidence | UnavailableEvidence,
+    processing: ProcessingEvidence | UnavailableEvidence,
+) -> ProcessingCorrelation:
+    if queue["outcome"] != "observed" or processing["outcome"] != "observed":
+        return "unknown"
+
+    sampled_ids = queue.get("sampled_pending_message_ids")
+    message_id = processing.get("message_id")
+    if not sampled_ids or not message_id:
+        return "unknown"
+    if message_id in sampled_ids:
+        return "matched"
+    return "not_in_sample"
+
+
+def _conclude(
+    state: DiagnosisState, correlation: ProcessingCorrelation | None
+) -> tuple[DiagnosisStatus, str]:
     queue = state["queue"]
     if queue["outcome"] != "observed":
         failure = _describe_failure(queue["outcome"])
@@ -111,6 +133,12 @@ def _conclude(state: DiagnosisState) -> tuple[DiagnosisStatus, str]:
     processing = state["processing"]
     if processing["outcome"] == "observed":
         detail = f"The latest processing attempt {processing['result']}."
+        if correlation == "matched":
+            detail += " Its message ID matches a sampled pending message."
+        elif correlation == "not_in_sample":
+            detail += " Its message ID was absent from the pending-message sample."
+        else:
+            detail += " Message correlation is unknown."
     else:
         failure = _describe_failure(processing["outcome"])
         detail = f"Processing inspection {failure}."
@@ -122,17 +150,22 @@ def _conclude(state: DiagnosisState) -> tuple[DiagnosisStatus, str]:
 
 
 def _write_report(state: DiagnosisState) -> dict[str, DiagnosisReport]:
-    status, conclusion = _conclude(state)
+    queue = state["queue"]
+    processing = state.get("processing")
+    correlation = (
+        _correlate_processing(queue, processing) if processing is not None else None
+    )
+    status, conclusion = _conclude(state, correlation)
     report: DiagnosisReport = {
         "question": state["question"],
         "status": status,
         "conclusion": conclusion,
-        "evidence": [state["queue"]],
+        "processing_correlation": correlation,
+        "evidence": [queue],
     }
     consumer = state.get("consumer")
     if consumer is not None:
         report["evidence"].append(consumer)
-    processing = state.get("processing")
     if processing is not None:
         report["evidence"].append(processing)
     return {"report": report}

@@ -11,6 +11,11 @@ from opspilot.core.startup import run_startup
 
 def main() -> None:
     no_processing_data = SimulatedProcessingAdapter()
+    running_backlog = SimulatedQueueConnector(
+        pending_messages=3,
+        consumer_running=True,
+        sampled_pending_message_ids=("msg-101", "msg-102"),
+    )
     scenarios = {
         "normal": (
             SimulatedQueueConnector(pending_messages=0, consumer_running=True),
@@ -29,8 +34,12 @@ def main() -> None:
             no_processing_data,
         ),
         "processing-failed": (
-            SimulatedQueueConnector(pending_messages=3, consumer_running=True),
-            SimulatedProcessingAdapter(latest_result="failed"),
+            running_backlog,
+            SimulatedProcessingAdapter(latest_result="failed", message_id="msg-101"),
+        ),
+        "processing-failed-outside-sample": (
+            running_backlog,
+            SimulatedProcessingAdapter(latest_result="failed", message_id="msg-099"),
         ),
     }
     parser = argparse.ArgumentParser(prog="opspilot")
