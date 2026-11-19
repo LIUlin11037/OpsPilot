@@ -107,6 +107,20 @@ RabbitMQ 队列指标的消息 ID 样本为空，因此报告的队列消息关�
 
 OpsPilot 向指定端点发送只读 GET，请求参数为 `queue`、`vhost`，以及用户指定时的 `message_id`。端点使用 HTTP 200 返回上述单条 JSON 记录或记录数组，查不到记录时返回 404 或空数组。OpsPilot 还会校验响应中的队列、虚拟主机和消息 ID。HTTP 错误、超时和无效响应会作为不可用证据写入报告。当前适配器直接访问无需凭据的测试端点。
 
+### Java 目标服务示例
+
+仓库中的独立 Java 示例用内存样例记录验证 HTTP 契约，需要 PATH 中的 JDK 17 或更高版本。在单独的终端从仓库根目录启动，传入端口、队列和虚拟主机，服务会打印回环地址。上面的 `--processing-url` 示例可以直接查询它。用 Ctrl+C 停止服务。 [JDK 单文件启动说明](https://docs.oracle.com/en/java/javase/17/docs/specs/man/java.html#using-source-file-mode-to-launch-single-file-source-code-programs)
+
+```powershell
+java --add-modules jdk.httpserver examples/java-processing-target/ProcessingTarget.java 8080 "orders" "/"
+```
+
+只验证 Java HTTP 接口时，可运行下列命令。测试会自动启动和关闭 Java 服务。
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_java_processing_target.py --java-target -q
+```
+
 ## RabbitMQ 验收测试
 
 默认 pytest 在离线环境运行。真实验收需要一个独立的 RabbitMQ 测试实例，开启 Management 插件及队列统计。可以在单独的 PowerShell 窗口启动下面的临时容器，启动完成后再运行测试。运行结束后用 Ctrl+C 停止容器。 [RabbitMQ 容器文档](https://www.rabbitmq.com/docs/download)
@@ -127,3 +141,9 @@ $env:OPSPILOT_RABBITMQ_PASSWORD = "opspilot_local_only"
 ```
 
 测试覆盖空队列、有待投递且无订阅、部分及全部消息已投递待确认、通过本地 HTTP 目标服务读取业务记录，以及按任务 ID 回看报告。每次测试使用 broker 生成的独占队列和临时 SQLite，结束时随连接和临时目录一起清理。
+
+在同一套验收中使用 Java 目标服务时，加上 `--java-target`。
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_rabbitmq_live.py --rabbitmq-live --java-target -q
+```

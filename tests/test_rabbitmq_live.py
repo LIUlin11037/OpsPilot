@@ -4,6 +4,8 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from tempfile import TemporaryDirectory
 from time import monotonic, sleep
@@ -40,6 +42,52 @@ def rabbitmq_settings(pytestconfig: pytest.Config) -> RabbitMQTestSettings:
     if missing:
         pytest.fail(f"Set {', '.join(missing)} for the RabbitMQ acceptance tests.")
     return RabbitMQTestSettings(*(os.environ[name] for name in names))
+
+
+@pytest.fixture
+def live_processing_target(pytestconfig, processing_service, java_processing_service):
+    if pytestconfig.getoption("--java-target"):
+        return java_processing_service
+
+    @contextmanager
+    def serve(queue: str, vhost: str) -> Iterator[str]:
+        records = [
+            {
+                "queue": queue,
+                "vhost": vhost,
+                "message_id": "order-msg-101",
+                "result": "failed",
+                "attempted_at": "2026-11-19T03:00:00Z",
+            },
+            {
+                "queue": queue,
+                "vhost": vhost,
+                "message_id": "order-msg-102",
+                "result": "succeeded",
+                "attempted_at": "2026-11-19T03:01:00Z",
+            },
+        ]
+
+        def read_records(path: str) -> tuple[int, bytes]:
+            url = urlsplit(path)
+            if url.path != "/processing":
+                return 404, b"[]"
+            query = parse_qs(url.query)
+            matches = [
+                record
+                for record in records
+                if all(
+                    query.get(field) == [record[field]]
+                    for field in ("queue", "vhost", "message_id")
+                )
+            ]
+            return (200, json.dumps(matches).encode()) if matches else (404, b"[]")
+
+        with processing_service(read_records) as (endpoint, requests):
+            yield endpoint
+        assert len(requests) == 1
+
+    return serve
 
 
 def _run_cli(directory: str, *arguments: str) -> dict:
@@ -86,7 +134,7 @@ def test_live_queue_lifecycle(
     rabbitmq_settings: RabbitMQTestSettings,
     prefetch: int,
     diagnosis_status: str,
-    processing_service,
+    live_processing_target,
 ) -> None:
     try:
         import pika
@@ -148,37 +196,7 @@ def test_live_queue_lifecycle(
             )
             delivered_snapshot = (MESSAGE_COUNT - prefetch, prefetch, 1)
             _wait_for_snapshot(connector, delivered_snapshot)
-            requested_record = {
-                "queue": name,
-                "vhost": parameters.virtual_host,
-                "message_id": "acceptance-msg-1",
-                "result": "failed",
-                "attempted_at": "2026-11-19T03:00:00Z",
-            }
-            unrelated_record = {
-                **requested_record,
-                "message_id": "acceptance-msg-2",
-                "result": "succeeded",
-                "attempted_at": "2026-11-19T03:01:00Z",
-            }
-            records = [requested_record, unrelated_record]
-
-            def read_records(path: str) -> tuple[int, bytes]:
-                url = urlsplit(path)
-                if url.path != "/processing":
-                    return 404, b"[]"
-                query = parse_qs(url.query)
-                matches = [
-                    record
-                    for record in records
-                    if all(
-                        query.get(field) == [record[field]]
-                        for field in ("queue", "vhost", "message_id")
-                    )
-                ]
-                return (200, json.dumps(matches).encode()) if matches else (404, b"[]")
-
-            with processing_service(read_records) as (endpoint, requests):
+            with live_processing_target(name, parameters.virtual_host) as endpoint:
                 delivered = _run_cli(
                     directory,
                     "diagnose",
@@ -186,19 +204,25 @@ def test_live_queue_lifecycle(
                     "--processing-url",
                     endpoint,
                     "--message-id",
-                    "acceptance-msg-1",
+                    "order-msg-101",
                     "Check deliveries awaiting acknowledgement",
                 )
-            (request,) = requests
             assert delivered["status"] == diagnosis_status
-            assert delivered["requested_message_id"] == "acceptance-msg-1"
+            assert delivered["requested_message_id"] == "order-msg-101"
             evidence, processing = delivered["evidence"]
             assert _snapshot(evidence) == delivered_snapshot
             assert f"awaiting acknowledgement is {prefetch}" in delivered["conclusion"]
             assert delivered["processing_correlation"] == "unknown"
-            assert processing["message_id"] == "acceptance-msg-1"
+            assert processing["message_id"] == "order-msg-101"
             assert processing["result"] == "failed"
-            assert processing["source"] == endpoint.removesuffix("/processing") + request
+            assert processing["attempted_at"] == "2026-11-19T03:00:00+00:00"
+            source = urlsplit(processing["source"])
+            assert source._replace(query="").geturl() == endpoint
+            assert parse_qs(source.query) == {
+                "queue": [name],
+                "vhost": [parameters.virtual_host],
+                "message_id": ["order-msg-101"],
+            }
             assert [call["tool"] for call in delivered["tool_calls"]] == [
                 "inspect_queue",
                 "inspect_processing",
