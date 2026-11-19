@@ -1,29 +1,42 @@
 import json
 import subprocess
 import sys
+from collections.abc import Iterator
 from datetime import datetime, timedelta
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from uuid import UUID
 
 import pytest
 
 from opspilot.adapters.simulated import SimulatedProcessingAdapter
 from opspilot.connectors.simulated import SimulatedQueueConnector
-from opspilot.core.diagnosis import (
-    DiagnosisReport,
-    ProcessingResult,
-    UnavailableOutcome,
-    run_diagnosis,
-)
+from opspilot.core.diagnosis import ProcessingResult, UnavailableOutcome, run_diagnosis
+from opspilot.task_store import StoredReport
 
 
-def _diagnose_from_cli(scenario: str) -> DiagnosisReport:
-    question = "消息已入队但未消费"
-    result = subprocess.run(
-        [sys.executable, "-m", "opspilot", "diagnose", "--scenario", scenario, question],
-        check=True,
+@pytest.fixture
+def cli_directory() -> Iterator[Path]:
+    with TemporaryDirectory(prefix="opspilot-test-") as directory:
+        yield Path(directory)
+
+
+def _run_cli(
+    cwd: Path, *arguments: str, check: bool = True
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "opspilot", *arguments],
+        cwd=cwd,
+        check=check,
         capture_output=True,
         text=True,
         timeout=30,
     )
+
+
+def _diagnose_from_cli(scenario: str, directory: Path) -> StoredReport:
+    question = "消息已入队但未消费"
+    result = _run_cli(directory, "diagnose", "--scenario", scenario, question)
     report = json.loads(result.stdout)
 
     assert report["question"] == question
@@ -41,9 +54,9 @@ def _diagnose_from_cli(scenario: str) -> DiagnosisReport:
     ],
 )
 def test_cli_diagnoses_simulated_queue(
-    scenario: str, status: str, pending_messages: int
+    scenario: str, status: str, pending_messages: int, cli_directory: Path
 ) -> None:
-    report = _diagnose_from_cli(scenario)
+    report = _diagnose_from_cli(scenario, cli_directory)
 
     assert report["status"] == status
     assert report["conclusion"]
@@ -63,8 +76,8 @@ def test_cli_diagnoses_simulated_queue(
         assert consumer["running"] is False
 
 
-def test_queue_timeout_leaves_queue_depth_unknown() -> None:
-    report = _diagnose_from_cli("queue-timeout")
+def test_queue_timeout_leaves_queue_depth_unknown(cli_directory: Path) -> None:
+    report = _diagnose_from_cli("queue-timeout", cli_directory)
 
     assert report["status"] == "undetermined"
     assert "Queue inspection timed out" in report["conclusion"]
@@ -75,8 +88,8 @@ def test_queue_timeout_leaves_queue_depth_unknown() -> None:
     assert "pending_messages" not in queue
 
 
-def test_missing_consumer_data_preserves_observed_backlog() -> None:
-    report = _diagnose_from_cli("consumer-data-missing")
+def test_missing_consumer_data_preserves_observed_backlog(cli_directory: Path) -> None:
+    report = _diagnose_from_cli("consumer-data-missing", cli_directory)
 
     assert report["status"] == "undetermined"
     assert "Consumer inspection returned no data" in report["conclusion"]
@@ -108,9 +121,13 @@ def test_missing_consumer_data_preserves_observed_backlog() -> None:
     ],
 )
 def test_cli_correlates_failed_processing_with_sample(
-    scenario: str, correlation: str, message_id: str, explanation: str
+    scenario: str,
+    correlation: str,
+    message_id: str,
+    explanation: str,
+    cli_directory: Path,
 ) -> None:
-    report = _diagnose_from_cli(scenario)
+    report = _diagnose_from_cli(scenario, cli_directory)
 
     assert report["status"] == "undetermined"
     assert report["processing_correlation"] == correlation
@@ -182,3 +199,46 @@ def test_correlation_is_unknown_when_an_id_is_unavailable(
     assert report["status"] == "undetermined"
     assert report["processing_correlation"] == "unknown"
     assert "Message correlation is unknown." in report["conclusion"]
+
+
+def test_reports_are_retrievable_across_cli_processes(cli_directory: Path) -> None:
+    database = cli_directory / "reports # local" / "diagnoses.sqlite3"
+    database_option = ("--db", str(database))
+    first = json.loads(
+        _run_cli(
+            cli_directory,
+            *database_option,
+            "diagnose",
+            "--scenario",
+            "normal",
+            "Check queue",
+        ).stdout
+    )
+    second = json.loads(
+        _run_cli(
+            cli_directory,
+            *database_option,
+            "diagnose",
+            "--scenario",
+            "processing-failed",
+            "消费者在运行，为什么队列还有积压？",
+        ).stdout
+    )
+
+    assert database.is_file()
+    assert first["task_id"] != second["task_id"]
+    for report in (first, second):
+        assert UUID(report["task_id"]).version == 4
+        result = _run_cli(cli_directory, *database_option, "report", report["task_id"])
+        assert json.loads(result.stdout) == report
+
+
+def test_report_lookup_with_no_database_does_not_create_one(cli_directory: Path) -> None:
+    task_id = "f0f34b73-e48f-4ea5-b689-02d2edf3e301"
+
+    result = _run_cli(cli_directory, "report", task_id, check=False)
+
+    assert result.returncode == 1
+    assert not result.stdout
+    assert f"no report found for task {task_id}" in result.stderr
+    assert not (cli_directory / ".opspilot").exists()

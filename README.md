@@ -37,4 +37,14 @@ python -m venv .venv
 | `unknown` | 处理查询已尝试，当前证据不足以进行 ID 比对。 |
 | `null` | 调查在处理查询之前结束。 |
 
-JSON 报告包含用户提交的问题、诊断状态和结论。每条证据记录工具、来源、UTC 观察时间及结果类型 `outcome`。结果为 `observed` 时附带观测值。模拟场景直接返回 `timeout` 或 `missing`，便于离线复现。
+JSON 报告包含任务 ID、用户提交的问题、诊断状态和结论。每条证据记录工具、来源、UTC 观察时间及结果类型 `outcome`。结果为 `observed` 时附带观测值。模拟场景直接返回 `timeout` 或 `missing`，便于离线复现。
+
+## 回看诊断报告
+
+`diagnose` 会先把报告保存到当前目录下的 `.opspilot/reports.sqlite3`，然后输出包含 `task_id` 的 JSON。用实际的任务 ID 替换示例中的 `TASK_ID`，即可读取同一份报告。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot report "TASK_ID"
+```
+
+如需指定数据库路径，在子命令前加 `--db PATH`。诊断和查询时使用同一路径。
