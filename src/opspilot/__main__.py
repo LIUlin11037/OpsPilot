@@ -18,8 +18,9 @@ from opspilot.connectors.simulated import SimulatedQueueConnector
 from opspilot.core.diagnosis import TargetProcessingTool, run_diagnosis, run_queue_diagnosis
 from opspilot.core.startup import run_startup
 from opspilot.core.target_trace import run_target_trace
+from opspilot.report_comparison import compare_trace_reports
 from opspilot.report_markdown import render_markdown
-from opspilot.task_store import list_reports, load_report, save_report
+from opspilot.task_store import StoredReport, list_reports, load_report, save_report
 
 
 def _add_queue_options(
@@ -111,6 +112,13 @@ def _hirehub_live_adapter(
     return HireHubLiveAdapter(mysql, queue, environment, args.recipient_id)
 
 
+def _require_report(database: Path, task_id: str, parser: argparse.ArgumentParser) -> StoredReport:
+    report = load_report(database, task_id)
+    if report is None:
+        parser.exit(1, f"opspilot: no report found for task {task_id}\n")
+    return report
+
+
 def main() -> None:
     no_processing_data = SimulatedProcessingAdapter()
     running_backlog = SimulatedQueueConnector(
@@ -187,6 +195,9 @@ def main() -> None:
     report_command.add_argument("--format", choices=("json", "markdown"), default="json")
     reports_command = commands.add_parser("reports", help="List recently saved reports.")
     reports_command.add_argument("--limit", type=int, default=20, help="Maximum reports (default: 20).")
+    compare = commands.add_parser("compare-hirehub", help="Compare saved reports for one HireHub event.")
+    compare.add_argument("before_task_id", help="Task ID of the baseline report.")
+    compare.add_argument("after_task_id", help="Task ID of the follow-up report.")
     inspect_queue = commands.add_parser(
         "inspect-queue", help="Read queue metrics from RabbitMQ Management."
     )
@@ -225,10 +236,17 @@ def main() -> None:
                 reports_command.error("--limit must be a positive 64-bit integer")
             print(json.dumps(list_reports(args.db, limit=args.limit), indent=2))
             return
+        if args.command == "compare-hirehub":
+            before = _require_report(args.db, args.before_task_id, parser)
+            after = _require_report(args.db, args.after_task_id, parser)
+            try:
+                comparison = compare_trace_reports(before, after)
+            except ValueError as error:
+                compare.error(str(error))
+            print(json.dumps(comparison, indent=2))
+            return
         if args.command == "report":
-            stored_report = load_report(args.db, args.task_id)
-            if stored_report is None:
-                parser.exit(1, f"opspilot: no report found for task {args.task_id}\n")
+            stored_report = _require_report(args.db, args.task_id, parser)
         elif args.command == "diagnose-hirehub":
             question = args.question.strip()
             if not question:

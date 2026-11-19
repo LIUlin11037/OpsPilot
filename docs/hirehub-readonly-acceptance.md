@@ -76,6 +76,16 @@ New-Item -ItemType Directory -Force .opspilot | Out-Null
 
 报告直接记录 MySQL 表和 RabbitMQ Management 请求地址。无法关联唯一 Outbox 消息时，已读取的队列指标仍可作为环境证据保留。需要保存原始快照以便复查时，使用 `capture-hirehub` 导出。
 
+## 对比复查前后的报告
+
+对同一消息提交两次诊断后，用 `reports` 查找任务 ID，再按基准、复查的顺序传给 `compare-hirehub`。两份报告须保存在同一个 SQLite 数据库，并匹配环境、虚拟主机、投递 ID 和已定位的消息 ID。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot compare-hirehub "BEFORE_TASK_ID" "AFTER_TASK_ID"
+```
+
+输出的 `changes` 只列出有变化的分支状态、队列读取结果和队列指标。`null` 表示指标不可用，`0` 表示实际观测到零。队列指标表示队列整体状态，分支状态按消息 ID 关联。
+
 ## 重跑直连验收
 
 使用一个已准备好的隔离投递用例和前述只读凭据。在运行测试期间保持 Notification 的状态稳定。验收测试读取单个投递与通知队列，报告写入 pytest 临时目录。
