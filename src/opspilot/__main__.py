@@ -3,22 +3,34 @@
 import argparse
 import json
 
+from opspilot.adapters.simulated import SimulatedProcessingAdapter
 from opspilot.connectors.simulated import SimulatedQueueConnector
 from opspilot.core.diagnosis import run_diagnosis
 from opspilot.core.startup import run_startup
 
 
 def main() -> None:
+    no_processing_data = SimulatedProcessingAdapter()
     scenarios = {
-        "normal": SimulatedQueueConnector(pending_messages=0, consumer_running=True),
-        "consumer-stopped": SimulatedQueueConnector(
-            pending_messages=3, consumer_running=False
+        "normal": (
+            SimulatedQueueConnector(pending_messages=0, consumer_running=True),
+            no_processing_data,
         ),
-        "queue-timeout": SimulatedQueueConnector(
-            pending_messages="timeout", consumer_running=True
+        "consumer-stopped": (
+            SimulatedQueueConnector(pending_messages=3, consumer_running=False),
+            no_processing_data,
         ),
-        "consumer-data-missing": SimulatedQueueConnector(
-            pending_messages=3, consumer_running="missing"
+        "queue-timeout": (
+            SimulatedQueueConnector(pending_messages="timeout", consumer_running=True),
+            no_processing_data,
+        ),
+        "consumer-data-missing": (
+            SimulatedQueueConnector(pending_messages=3, consumer_running="missing"),
+            no_processing_data,
+        ),
+        "processing-failed": (
+            SimulatedQueueConnector(pending_messages=3, consumer_running=True),
+            SimulatedProcessingAdapter(latest_result="failed"),
         ),
     }
     parser = argparse.ArgumentParser(prog="opspilot")
@@ -37,7 +49,8 @@ def main() -> None:
     if not question:
         diagnose.error("question must not be empty")
 
-    report = run_diagnosis(question, scenarios[args.scenario])
+    connector, adapter = scenarios[args.scenario]
+    report = run_diagnosis(question, connector, adapter)
     print(json.dumps(report, indent=2))
 
 

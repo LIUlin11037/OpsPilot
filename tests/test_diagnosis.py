@@ -5,8 +5,14 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from opspilot.adapters.simulated import SimulatedProcessingAdapter
 from opspilot.connectors.simulated import SimulatedQueueConnector
-from opspilot.core.diagnosis import DiagnosisReport, run_diagnosis
+from opspilot.core.diagnosis import (
+    DiagnosisReport,
+    ProcessingResult,
+    UnavailableOutcome,
+    run_diagnosis,
+)
 
 
 def _diagnose_from_cli(scenario: str) -> DiagnosisReport:
@@ -83,13 +89,50 @@ def test_missing_consumer_data_preserves_observed_backlog() -> None:
     assert "running" not in consumer
 
 
-def test_backlog_with_running_consumer_has_undetermined_cause() -> None:
-    tools = SimulatedQueueConnector(pending_messages=3, consumer_running=True)
-
-    report = run_diagnosis("Messages are stuck in the queue", tools)
+def test_cli_reports_failed_processing_as_evidence() -> None:
+    report = _diagnose_from_cli("processing-failed")
 
     assert report["status"] == "undetermined"
+    assert "The latest processing attempt failed." in report["conclusion"]
+    queue, consumer, processing = report["evidence"]
+    assert queue["tool"] == "inspect_queue"
+    assert queue["outcome"] == "observed"
+    assert queue["pending_messages"] == 3
+    assert consumer["tool"] == "inspect_consumer"
+    assert consumer["outcome"] == "observed"
+    assert consumer["running"] is True
+    assert processing["tool"] == "inspect_processing"
+    assert processing["source"] == "simulated:processing"
+    assert processing["outcome"] == "observed"
+    assert processing["result"] == "failed"
+
+
+@pytest.mark.parametrize(
+    ("latest_result", "outcome", "explanation"),
+    [
+        ("succeeded", "observed", "The latest processing attempt succeeded."),
+        ("missing", "missing", "Processing inspection returned no data."),
+        ("timeout", "timeout", "Processing inspection timed out."),
+    ],
+)
+def test_processing_evidence_preserves_uncertainty(
+    latest_result: ProcessingResult | UnavailableOutcome,
+    outcome: str,
+    explanation: str,
+) -> None:
+    tools = SimulatedQueueConnector(pending_messages=3, consumer_running=True)
+    adapter = SimulatedProcessingAdapter(latest_result)
+
+    report = run_diagnosis("Messages are stuck in the queue", tools, adapter)
+
+    assert report["status"] == "undetermined"
+    assert explanation in report["conclusion"]
     assert [evidence["tool"] for evidence in report["evidence"]] == [
         "inspect_queue",
         "inspect_consumer",
+        "inspect_processing",
     ]
+    processing = report["evidence"][-1]
+    assert processing["outcome"] == outcome
+    if processing["outcome"] != "observed":
+        assert "result" not in processing

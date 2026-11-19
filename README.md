@@ -20,10 +20,13 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m opspilot diagnose --scenario normal "消息已入队但未消费"
 .\.venv\Scripts\python.exe -m opspilot diagnose --scenario queue-timeout "消息已入队但未消费"
 .\.venv\Scripts\python.exe -m opspilot diagnose --scenario consumer-data-missing "消息已入队但未消费"
+.\.venv\Scripts\python.exe -m opspilot diagnose --scenario processing-failed "消费者在运行，为什么队列还有积压？"
 ```
 
 `--scenario` 选择本地模拟状态。LangGraph 先查询队列，发现待消费消息时再查询消费者。`normal` 场景只返回队列证据，`consumer-stopped` 场景返回队列和消费者两条证据。
 
 `queue-timeout` 场景记录队列查询超时并结束调查。`consumer-data-missing` 场景保留已观测到的积压，并记录消费者数据缺失。两种场景的诊断状态均为 `undetermined`。
+
+`processing-failed` 场景确认队列有积压且消费者正在运行后，再让目标适配器只读查询最近一次处理结果。报告将处理失败记录为证据，积压原因仍标为 `undetermined`。
 
 JSON 报告包含用户提交的问题、诊断状态和结论。每条证据记录工具、来源、UTC 观察时间及结果类型 `outcome`。结果为 `observed` 时附带观测值。模拟场景直接返回 `timeout` 或 `missing`，便于离线复现。
