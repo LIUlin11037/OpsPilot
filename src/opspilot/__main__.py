@@ -14,6 +14,12 @@ def main() -> None:
         "consumer-stopped": SimulatedQueueConnector(
             pending_messages=3, consumer_running=False
         ),
+        "queue-timeout": SimulatedQueueConnector(
+            pending_messages="timeout", consumer_running=True
+        ),
+        "consumer-data-missing": SimulatedQueueConnector(
+            pending_messages=3, consumer_running="missing"
+        ),
     }
     parser = argparse.ArgumentParser(prog="opspilot")
     commands = parser.add_subparsers(dest="command")

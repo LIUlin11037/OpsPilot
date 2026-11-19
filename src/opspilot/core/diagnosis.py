@@ -4,6 +4,9 @@ from typing import Literal, Protocol, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+UnavailableOutcome = Literal["timeout", "missing"]
+DiagnosisStatus = Literal["no_backlog_observed", "consumer_stopped", "undetermined"]
+
 
 class Observation(TypedDict):
     source: str
@@ -12,25 +15,32 @@ class Observation(TypedDict):
 
 class QueueEvidence(Observation):
     tool: Literal["inspect_queue"]
+    outcome: Literal["observed"]
     pending_messages: int
 
 
 class ConsumerEvidence(Observation):
     tool: Literal["inspect_consumer"]
+    outcome: Literal["observed"]
     running: bool
 
 
-class DiagnosticTools(Protocol):
-    def inspect_queue(self) -> QueueEvidence: ...
+class UnavailableEvidence(Observation):
+    tool: Literal["inspect_queue", "inspect_consumer"]
+    outcome: UnavailableOutcome
 
-    def inspect_consumer(self) -> ConsumerEvidence: ...
+
+class DiagnosticTools(Protocol):
+    def inspect_queue(self) -> QueueEvidence | UnavailableEvidence: ...
+
+    def inspect_consumer(self) -> ConsumerEvidence | UnavailableEvidence: ...
 
 
 class DiagnosisReport(TypedDict):
     question: str
-    status: Literal["no_backlog_observed", "consumer_stopped", "undetermined"]
+    status: DiagnosisStatus
     conclusion: str
-    evidence: list[QueueEvidence | ConsumerEvidence]
+    evidence: list[QueueEvidence | ConsumerEvidence | UnavailableEvidence]
 
 
 class DiagnosisInput(TypedDict):
@@ -38,46 +48,73 @@ class DiagnosisInput(TypedDict):
 
 
 class DiagnosisState(DiagnosisInput, total=False):
-    queue: QueueEvidence
-    consumer: ConsumerEvidence
+    queue: QueueEvidence | UnavailableEvidence
+    consumer: ConsumerEvidence | UnavailableEvidence
     report: DiagnosisReport
 
 
 def _after_queue(state: DiagnosisState) -> Literal["inspect_consumer", "report"]:
-    if state["queue"]["pending_messages"] > 0:
+    queue = state["queue"]
+    if queue["outcome"] == "observed" and queue["pending_messages"] > 0:
         return "inspect_consumer"
     return "report"
 
 
+def _describe_failure(outcome: UnavailableOutcome) -> str:
+    return "timed out" if outcome == "timeout" else "returned no data"
+
+
+def _conclude(
+    queue: QueueEvidence | UnavailableEvidence,
+    consumer: ConsumerEvidence | UnavailableEvidence | None,
+) -> tuple[DiagnosisStatus, str]:
+    if queue["outcome"] != "observed":
+        failure = _describe_failure(queue["outcome"])
+        return "undetermined", f"Queue inspection {failure}. Queue depth is unknown."
+
+    if consumer is None:
+        return "no_backlog_observed", "No pending messages were observed in the queue."
+
+    if consumer["outcome"] != "observed":
+        failure = _describe_failure(consumer["outcome"])
+        return "undetermined", (
+            f"The queue has pending messages. Consumer inspection {failure}, "
+            "so the cause of the backlog is undetermined."
+        )
+
+    if consumer["running"]:
+        return "undetermined", (
+            "The queue has pending messages and the consumer is running. "
+            "The cause of the backlog is undetermined."
+        )
+
+    return "consumer_stopped", "The queue has pending messages and the consumer is stopped."
+
+
 def _write_report(state: DiagnosisState) -> dict[str, DiagnosisReport]:
+    queue = state["queue"]
+    consumer = state.get("consumer")
+    status, conclusion = _conclude(queue, consumer)
     report: DiagnosisReport = {
         "question": state["question"],
-        "status": "no_backlog_observed",
-        "conclusion": "No pending messages were observed in the queue.",
-        "evidence": [state["queue"]],
+        "status": status,
+        "conclusion": conclusion,
+        "evidence": [queue],
     }
-    consumer = state.get("consumer")
     if consumer is not None:
         report["evidence"].append(consumer)
-        if consumer["running"]:
-            report["status"] = "undetermined"
-            report["conclusion"] = (
-                "The queue has pending messages and the consumer is running. "
-                "The cause of the backlog is undetermined."
-            )
-        else:
-            report["status"] = "consumer_stopped"
-            report["conclusion"] = (
-                "The queue has pending messages and the consumer is stopped."
-            )
     return {"report": report}
 
 
 def run_diagnosis(question: str, tools: DiagnosticTools) -> DiagnosisReport:
-    def inspect_queue(_state: DiagnosisState) -> dict[str, QueueEvidence]:
+    def inspect_queue(
+        _state: DiagnosisState,
+    ) -> dict[str, QueueEvidence | UnavailableEvidence]:
         return {"queue": tools.inspect_queue()}
 
-    def inspect_consumer(_state: DiagnosisState) -> dict[str, ConsumerEvidence]:
+    def inspect_consumer(
+        _state: DiagnosisState,
+    ) -> dict[str, ConsumerEvidence | UnavailableEvidence]:
         return {"consumer": tools.inspect_consumer()}
 
     graph = StateGraph(DiagnosisState)

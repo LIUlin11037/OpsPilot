@@ -3,26 +3,48 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from opspilot.core.diagnosis import ConsumerEvidence, QueueEvidence
+from opspilot.core.diagnosis import (
+    ConsumerEvidence,
+    Observation,
+    QueueEvidence,
+    UnavailableEvidence,
+    UnavailableOutcome,
+)
 
 
 @dataclass(frozen=True)
 class SimulatedQueueConnector:
-    pending_messages: int
-    consumer_running: bool
+    pending_messages: int | UnavailableOutcome
+    consumer_running: bool | UnavailableOutcome
 
-    def inspect_queue(self) -> QueueEvidence:
-        return {
-            "tool": "inspect_queue",
+    def inspect_queue(self) -> QueueEvidence | UnavailableEvidence:
+        observation: Observation = {
             "source": "simulated:queue",
             "observed_at": datetime.now(timezone.utc).isoformat(),
-            "pending_messages": self.pending_messages,
+        }
+        pending_messages = self.pending_messages
+        if isinstance(pending_messages, str):
+            return {**observation, "tool": "inspect_queue", "outcome": pending_messages}
+
+        return {
+            **observation,
+            "tool": "inspect_queue",
+            "outcome": "observed",
+            "pending_messages": pending_messages,
         }
 
-    def inspect_consumer(self) -> ConsumerEvidence:
-        return {
-            "tool": "inspect_consumer",
+    def inspect_consumer(self) -> ConsumerEvidence | UnavailableEvidence:
+        observation: Observation = {
             "source": "simulated:consumer",
             "observed_at": datetime.now(timezone.utc).isoformat(),
-            "running": self.consumer_running,
+        }
+        running = self.consumer_running
+        if isinstance(running, str):
+            return {**observation, "tool": "inspect_consumer", "outcome": running}
+
+        return {
+            **observation,
+            "tool": "inspect_consumer",
+            "outcome": "observed",
+            "running": running,
         }
