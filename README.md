@@ -68,3 +68,24 @@ JSON 报告包含任务 ID、用户提交的问题、诊断状态和结论。每
 ```
 
 RabbitMQ 模式保留队列证据及读取耗时。报告分别描述待投递数和已投递待确认数。待投递数为零时，`no_backlog_observed` 仅表示当次未观测到等待投递的消息，报告仍会列出待确认数。发现待投递积压时，报告也会说明消费者注册数，根因标为 `undetermined`。
+
+## RabbitMQ 验收测试
+
+默认 pytest 在离线环境运行。真实验收需要一个独立的 RabbitMQ 测试实例，开启 Management 插件及队列统计。可以在单独的 PowerShell 窗口启动下面的临时容器，启动完成后再运行测试。运行结束后用 Ctrl+C 停止容器。 [RabbitMQ 容器文档](https://www.rabbitmq.com/docs/download)
+
+```powershell
+docker run --rm -it -p 127.0.0.1:25672:5672 -p 127.0.0.1:25673:15672 -e RABBITMQ_DEFAULT_USER=opspilot_test -e RABBITMQ_DEFAULT_PASS=opspilot_local_only rabbitmq:4-management
+```
+
+在 OpsPilot 仓库根目录运行以下命令。使用已有测试实例时，将两个 URL 和查询凭据替换为该实例的配置。AMQP 用户需要能创建、发布和订阅临时队列。Management 查询凭据可以独立配置。
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,rabbitmq-test]"
+$env:OPSPILOT_TEST_RABBITMQ_AMQP_URL = "amqp://opspilot_test:opspilot_local_only@127.0.0.1:25672/%2F"
+$env:OPSPILOT_TEST_RABBITMQ_MANAGEMENT_URL = "http://127.0.0.1:25673"
+$env:OPSPILOT_RABBITMQ_USER = "opspilot_test"
+$env:OPSPILOT_RABBITMQ_PASSWORD = "opspilot_local_only"
+.\.venv\Scripts\python.exe -m pytest tests/test_rabbitmq_live.py --rabbitmq-live -q
+```
+
+测试覆盖空队列、有待投递且无订阅、部分已投递待确认、全部已投递待确认，以及按任务 ID 回看报告。每次测试使用 broker 生成的独占队列和临时 SQLite，结束时随连接和临时目录一起清理。

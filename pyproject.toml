@@ -12,6 +12,7 @@ dependencies = ["langgraph>=1,<2"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10"]
+rabbitmq-test = ["pika>=1.5,<2"]
 
 [project.scripts]
 opspilot = "opspilot.__main__:main"
