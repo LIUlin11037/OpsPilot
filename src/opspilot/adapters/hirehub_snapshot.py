@@ -9,14 +9,14 @@ from typing import Any
 from opspilot.core.diagnosis import TraceEvidence
 from opspilot.core.target_trace import TargetTraceRead
 
-_NOTIFICATION_QUEUE = "hirehub.notification.msg"
-_CONSUMERS = {"job": "job-delivery-count", "notification": "notification"}
+NOTIFICATION_QUEUE = "hirehub.notification.msg"
+CONSUMERS = {"job": "job-delivery-count", "notification": "notification"}
 _ORIGINS = {
     "delivery": "hirehub_delivery.delivery",
     "outbox": "hirehub_delivery.local_message",
     "job": "hirehub_job.mq_consume_log",
     "notification": "hirehub_notification.mq_consume_log",
-    "queue": f"RabbitMQ/{_NOTIFICATION_QUEUE}",
+    "queue": f"RabbitMQ/{NOTIFICATION_QUEUE}",
 }
 
 
@@ -85,7 +85,7 @@ class _Snapshot:
         self, name: str, *, message_id: str | None = None
     ) -> tuple[TraceEvidence, list[dict[str, Any]]]:
         evidence, section = self.section(name)
-        consumer = _CONSUMERS.get(name)
+        consumer = CONSUMERS.get(name)
         if message_id is not None:
             evidence["branch"] = name
             evidence["message_id"] = message_id
@@ -119,7 +119,7 @@ class _Snapshot:
         evidence, section = self.section("queue")
         if evidence["outcome"] != "observed":
             return evidence
-        if section.get("name") != _NOTIFICATION_QUEUE:
+        if section.get("name") != NOTIFICATION_QUEUE:
             _mark_missing(evidence, "queue_mismatch")
             return evidence
 
@@ -141,7 +141,7 @@ class _Snapshot:
 @dataclass(frozen=True)
 class HireHubSnapshotAdapter:
     path: Path
-    branches = tuple(_CONSUMERS)
+    branches = tuple(CONSUMERS)
 
     def inspect_trace(self, entity_id: int) -> TargetTraceRead:
         source = self.path.absolute().as_uri()

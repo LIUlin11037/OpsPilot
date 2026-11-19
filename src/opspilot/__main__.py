@@ -6,10 +6,12 @@ import os
 import sqlite3
 from pathlib import Path
 
-from opspilot.adapters.hirehub_snapshot import HireHubSnapshotAdapter
+from opspilot.adapters.hirehub_capture import capture_hirehub_snapshot
+from opspilot.adapters.hirehub_snapshot import NOTIFICATION_QUEUE, HireHubSnapshotAdapter
 from opspilot.adapters.http_processing import HttpProcessingAdapter
 from opspilot.adapters.json_processing import JsonProcessingAdapter
 from opspilot.adapters.simulated import SimulatedProcessingAdapter
+from opspilot.connectors.mysql import MySQLConnector
 from opspilot.connectors.rabbitmq import RabbitMQQueueConnector
 from opspilot.connectors.simulated import SimulatedQueueConnector
 from opspilot.core.diagnosis import TargetProcessingTool, run_diagnosis, run_queue_diagnosis
@@ -19,9 +21,12 @@ from opspilot.task_store import load_report, save_report
 
 
 def _add_queue_options(
-    parser: argparse.ArgumentParser, *, require_queue: bool = False
+    parser: argparse.ArgumentParser, *, require_queue: bool = False, fixed_queue: str | None = None
 ) -> None:
-    parser.add_argument("--queue", required=require_queue)
+    if fixed_queue is None:
+        parser.add_argument("--queue", required=require_queue)
+    else:
+        parser.set_defaults(queue=fixed_queue)
     parser.add_argument("--vhost", help="RabbitMQ virtual host (default: /).")
     parser.add_argument(
         "--timeout", type=float, metavar="SECONDS", help="Socket timeout (default: 5)."
@@ -64,6 +69,32 @@ def _target_processing_tool(
             timeout_seconds=connector.timeout_seconds,
         )
     return None
+
+
+def _capture_hirehub(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    if args.delivery_id <= 0 or args.recipient_id <= 0:
+        parser.error("--delivery-id and --recipient-id must be positive")
+    environment = args.environment.strip()
+    if not environment:
+        parser.error("--environment must not be empty")
+
+    username = os.getenv("OPSPILOT_MYSQL_USER")
+    password = os.getenv("OPSPILOT_MYSQL_PASSWORD")
+    if not username or password is None:
+        parser.error("set OPSPILOT_MYSQL_USER and OPSPILOT_MYSQL_PASSWORD")
+
+    queue = _rabbitmq_connector(args, parser)
+    try:
+        mysql = MySQLConnector(
+            args.mysql_host, args.mysql_port, username, password, queue.timeout_seconds
+        )
+        snapshot = capture_hirehub_snapshot(
+            mysql, queue, environment=environment,
+            delivery_id=args.delivery_id, recipient_id=args.recipient_id,
+        )
+    except ValueError as error:
+        parser.error(str(error))
+    print(json.dumps(snapshot, indent=2))
 
 
 def main() -> None:
@@ -128,6 +159,16 @@ def main() -> None:
     hirehub.add_argument("--snapshot", type=Path, required=True)
     hirehub.add_argument("--delivery-id", type=int, required=True)
     hirehub.add_argument("question", help="Incident description.")
+    capture = commands.add_parser(
+        "capture-hirehub", help="Export live HireHub observations as a read-only snapshot."
+    )
+    capture.add_argument("--environment", required=True, help="Isolated environment label.")
+    capture.add_argument("--delivery-id", type=int, required=True)
+    capture.add_argument("--recipient-id", type=int, required=True, help="Expected HR user ID.")
+    capture.add_argument("--mysql-host", default="127.0.0.1")
+    capture.add_argument("--mysql-port", type=int, default=3306)
+    capture.add_argument("--management-url", required=True, help="RabbitMQ Management API base URL.")
+    _add_queue_options(capture, fixed_queue=NOTIFICATION_QUEUE)
     report_command = commands.add_parser("report", help="Show a saved report.")
     report_command.add_argument("task_id", help="Task ID returned by diagnose.")
     inspect_queue = commands.add_parser(
@@ -140,6 +181,10 @@ def main() -> None:
     if args.command is None:
         state = run_startup()
         print(f"OpsPilot is {state['status']}.")
+        return
+
+    if args.command == "capture-hirehub":
+        _capture_hirehub(args, capture)
         return
 
     if args.command == "inspect-queue":

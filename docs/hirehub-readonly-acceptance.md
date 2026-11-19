@@ -1,6 +1,6 @@
 # HireHub 投递通知只读验收
 
-源码核对基线为 HireHub `15ee3f9`。可用随仓库提供的合成快照执行离线验收，隔离 HireHub 实例的验证待后续运行。
+源码核对基线为 HireHub `15ee3f9`。2026 年 11 月 19 日已在隔离 HireHub 实例上完成只读验收。仓库中的合成快照可用于离线复现。
 
 ## 验收用例
 
@@ -47,4 +47,31 @@
 
 报告的 `target_trace.branches` 应为 Job `observed`、Notification `not_observed`。Notification 证据中的 `outcome: "observed"` 表示查询成功，`row_count: 0` 表示没有查到匹配记录。将快照副本中 Notification 的 `outcome` 改为 `timeout` 或 `missing`，再次运行时该分支应为 `unknown`，并保留已经读到的 Job 与 Outbox 证据。缺少查询范围或键不匹配时，该分支也为 `unknown`。
 
-可用 `opspilot report TASK_ID` 回看完整报告。队列指标来自同一份快照，根因仍为 `undetermined`。下一阶段需要从隔离 HireHub 环境以只读方式导出同样的投递、Outbox、消费记录和队列指标。
+可用 `opspilot report TASK_ID` 回看完整报告。队列指标来自同一份快照，根因仍为 `undetermined`。
+
+## 从隔离环境采集快照
+
+`capture-hirehub` 适用于三个 HireHub schema 位于同一 MySQL 实例、业务时间以 UTC 写入的隔离环境。为 MySQL 账号授予上述四张证据表的 `SELECT` 权限，并为 RabbitMQ Management 账号授予读取通知队列的权限。通过环境变量提供 `OPSPILOT_MYSQL_USER`、`OPSPILOT_MYSQL_PASSWORD`、`OPSPILOT_RABBITMQ_USER` 和 `OPSPILOT_RABBITMQ_PASSWORD`。
+
+在 OpsPilot 根目录运行。将端口、虚拟主机、投递 ID 和预期 HR ID 换成隔离环境的实际值。
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[hirehub]"
+New-Item -ItemType Directory -Force .opspilot | Out-Null
+.\.venv\Scripts\python.exe -m opspilot capture-hirehub --environment hirehub-local --delivery-id 1001 --recipient-id 4002 --mysql-host 127.0.0.1 --mysql-port 13306 --management-url http://127.0.0.1:15673 --vhost "/" | Out-File -Encoding utf8 .opspilot/hirehub-snapshot.json
+.\.venv\Scripts\python.exe -m opspilot diagnose-hirehub --snapshot .opspilot/hirehub-snapshot.json --delivery-id 1001 "投递成功，但 HR 未收到站内通知"
+```
+
+采集命令输出最小字段。接收人核对只保留布尔值或未知值。各来源分别记录读取时间和结果，单项查询失败时保留其他可读取的证据。
+
+## 真实验收结果
+
+隔离环境运行 `15ee3f9` 的 Delivery、Job、Notification，以及 MySQL 8.0.46、Redis 和 RabbitMQ 3.13.7。预置合成投递及 Outbox 记录后，由真实服务发送和消费消息。Elasticsearch 索引的启动检查使用本地测试响应。该次验收使用临时脚本导出快照。
+
+| 场景 | 观测结果 | Notification 分支 |
+| --- | --- | --- |
+| 暂停 Notification | Outbox 为 `CONFIRMED`，Job 投递计数增加 1，通知查询零行，队列待投递 1 条且消费者为 0 | `not_observed` |
+| 通知日志表拒绝查询 | MySQL 返回 `1142`，仍可读取 Job 和 Outbox | `unknown` |
+| 恢复 Notification | 查到 1 条消费记录和 1 条收件人记录，待投递数归零 | `observed` |
+
+三份诊断报告均可按任务 ID 回读，投递状态在诊断前后均为 `PENDING`。
