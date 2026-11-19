@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from tempfile import TemporaryDirectory
 from threading import Event, Thread
 
 import pytest
@@ -50,6 +51,21 @@ def _management_api(
             release.set()
             server.shutdown()
             worker.join()
+
+
+def _cli(*arguments: str, cwd: str | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "opspilot", *arguments],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={
+            **os.environ,
+            "OPSPILOT_RABBITMQ_USER": "reader",
+            "OPSPILOT_RABBITMQ_PASSWORD": "test-pass",
+        },
+    )
 
 
 @pytest.mark.parametrize("pending", [0, 3])
@@ -132,26 +148,7 @@ def test_socket_timeout_is_reported_separately() -> None:
 )
 def test_inspect_queue_cli(status: int, exit_code: int, outcome: str) -> None:
     with _management_api(b'{"messages_ready": 7}', status=status) as (url, requests):
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "opspilot",
-                "inspect-queue",
-                "--management-url",
-                url,
-                "--queue",
-                "orders",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env={
-                **os.environ,
-                "OPSPILOT_RABBITMQ_USER": "reader",
-                "OPSPILOT_RABBITMQ_PASSWORD": "test-pass",
-            },
-        )
+        result = _cli("inspect-queue", "--management-url", url, "--queue", "orders")
 
     assert result.returncode == exit_code
     assert not result.stderr
@@ -160,3 +157,46 @@ def test_inspect_queue_cli(status: int, exit_code: int, outcome: str) -> None:
     assert evidence["source"] == f"{url}/api/queues/%2F/orders"
     assert "test-pass" not in result.stdout
     assert len(requests) == 1
+
+
+@pytest.mark.parametrize(
+    ("http_status", "pending", "diagnosis_status", "outcome"),
+    [
+        (200, 0, "no_backlog_observed", "observed"),
+        (200, 7, "undetermined", "observed"),
+        (403, 0, "undetermined", "missing"),
+    ],
+)
+def test_rabbitmq_diagnosis_saves_queue_evidence(
+    http_status: int, pending: int, diagnosis_status: str, outcome: str
+) -> None:
+    body = json.dumps({"messages_ready": pending}).encode()
+    with TemporaryDirectory(prefix="opspilot-rabbitmq-test-") as directory:
+        with _management_api(body, status=http_status) as (url, requests):
+            result = _cli(
+                "diagnose",
+                "--management-url",
+                url,
+                "--queue",
+                "orders",
+                "Check backlog",
+                cwd=directory,
+            )
+        assert result.returncode == 0, result.stderr
+        report = json.loads(result.stdout)
+        saved = _cli("report", report["task_id"], cwd=directory)
+
+    assert saved.returncode == 0, saved.stderr
+    assert json.loads(saved.stdout) == report
+    assert len(requests) == 1
+    assert report["status"] == diagnosis_status
+    assert report["processing_correlation"] is None
+    evidence, = report["evidence"]
+    call, = report["tool_calls"]
+    assert call["tool"] == evidence["tool"] == "inspect_queue"
+    assert call["outcome"] == evidence["outcome"] == outcome
+    if outcome == "observed":
+        assert evidence["pending_messages"] == pending
+    else:
+        assert evidence["reason"] == "access_denied"
+        assert "pending_messages" not in evidence

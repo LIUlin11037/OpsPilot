@@ -9,9 +9,40 @@ from pathlib import Path
 from opspilot.adapters.simulated import SimulatedProcessingAdapter
 from opspilot.connectors.rabbitmq import RabbitMQQueueConnector
 from opspilot.connectors.simulated import SimulatedQueueConnector
-from opspilot.core.diagnosis import run_diagnosis
+from opspilot.core.diagnosis import run_diagnosis, run_queue_diagnosis
 from opspilot.core.startup import run_startup
 from opspilot.task_store import load_report, save_report
+
+
+def _add_queue_options(
+    parser: argparse.ArgumentParser, *, require_queue: bool = False
+) -> None:
+    parser.add_argument("--queue", required=require_queue)
+    parser.add_argument("--vhost", help="RabbitMQ virtual host (default: /).")
+    parser.add_argument(
+        "--timeout", type=float, metavar="SECONDS", help="Socket timeout (default: 5)."
+    )
+
+
+def _rabbitmq_connector(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> RabbitMQQueueConnector:
+    if args.queue is None:
+        parser.error("--queue is required with --management-url")
+
+    username = os.getenv("OPSPILOT_RABBITMQ_USER")
+    password = os.getenv("OPSPILOT_RABBITMQ_PASSWORD")
+    if username is None or password is None:
+        parser.error("set OPSPILOT_RABBITMQ_USER and OPSPILOT_RABBITMQ_PASSWORD")
+
+    return RabbitMQQueueConnector(
+        management_url=args.management_url,
+        queue=args.queue,
+        username=username,
+        password=password,
+        vhost="/" if args.vhost is None else args.vhost,
+        timeout_seconds=5.0 if args.timeout is None else args.timeout,
+    )
 
 
 def main() -> None:
@@ -56,8 +87,11 @@ def main() -> None:
         help="SQLite report database (default: .opspilot/reports.sqlite3).",
     )
     commands = parser.add_subparsers(dest="command")
-    diagnose = commands.add_parser("diagnose", help="Diagnose a simulated queue.")
-    diagnose.add_argument("--scenario", choices=scenarios, required=True)
+    diagnose = commands.add_parser("diagnose", help="Diagnose a queue and save a report.")
+    source = diagnose.add_mutually_exclusive_group(required=True)
+    source.add_argument("--scenario", choices=scenarios)
+    source.add_argument("--management-url", help="RabbitMQ Management API base URL.")
+    _add_queue_options(diagnose)
     diagnose.add_argument("question", help="Incident description.")
     report_command = commands.add_parser("report", help="Show a saved report.")
     report_command.add_argument("task_id", help="Task ID returned by diagnose.")
@@ -65,9 +99,7 @@ def main() -> None:
         "inspect-queue", help="Read queue metrics from RabbitMQ Management."
     )
     inspect_queue.add_argument("--management-url", required=True)
-    inspect_queue.add_argument("--queue", required=True)
-    inspect_queue.add_argument("--vhost", default="/")
-    inspect_queue.add_argument("--timeout", type=float, default=5.0, metavar="SECONDS")
+    _add_queue_options(inspect_queue, require_queue=True)
     args = parser.parse_args()
 
     if args.command is None:
@@ -76,18 +108,7 @@ def main() -> None:
         return
 
     if args.command == "inspect-queue":
-        username = os.getenv("OPSPILOT_RABBITMQ_USER")
-        password = os.getenv("OPSPILOT_RABBITMQ_PASSWORD")
-        if username is None or password is None:
-            inspect_queue.error("set OPSPILOT_RABBITMQ_USER and OPSPILOT_RABBITMQ_PASSWORD")
-        connector = RabbitMQQueueConnector(
-            management_url=args.management_url,
-            queue=args.queue,
-            username=username,
-            password=password,
-            vhost=args.vhost,
-            timeout_seconds=args.timeout,
-        )
+        connector = _rabbitmq_connector(args, inspect_queue)
         try:
             evidence = connector.inspect_queue()
         except ValueError as error:
@@ -106,8 +127,17 @@ def main() -> None:
             question = args.question.strip()
             if not question:
                 diagnose.error("question must not be empty")
-            connector, adapter = scenarios[args.scenario]
-            report = run_diagnosis(question, connector, adapter)
+            if args.management_url is not None:
+                queue_tool = _rabbitmq_connector(args, diagnose)
+                try:
+                    report = run_queue_diagnosis(question, queue_tool)
+                except ValueError as error:
+                    diagnose.error(str(error))
+            else:
+                if any(value is not None for value in (args.queue, args.vhost, args.timeout)):
+                    diagnose.error("--queue, --vhost, and --timeout require --management-url")
+                simulated_queue, adapter = scenarios[args.scenario]
+                report = run_diagnosis(question, simulated_queue, adapter)
             stored_report = save_report(args.db, report)
     except (OSError, sqlite3.Error, json.JSONDecodeError) as error:
         parser.exit(1, f"opspilot: report storage error: {error}\n")

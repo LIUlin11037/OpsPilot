@@ -54,9 +54,11 @@ class ToolCall(TypedDict):
     duration_ms: float
 
 
-class DiagnosticTools(Protocol):
+class QueueTool(Protocol):
     def inspect_queue(self) -> QueueEvidence | UnavailableEvidence: ...
 
+
+class DiagnosticTools(QueueTool, Protocol):
     def inspect_consumer(self) -> ConsumerEvidence | UnavailableEvidence: ...
 
 
@@ -132,6 +134,11 @@ def _conclude(
 
     consumer = state.get("consumer")
     if consumer is None:
+        if queue["pending_messages"] > 0:
+            return "undetermined", (
+                "The queue has pending messages. The cause remains undetermined "
+                "from queue metrics alone."
+            )
         return "no_backlog_observed", "No pending messages were observed in the queue."
 
     if consumer["outcome"] != "observed":
@@ -205,11 +212,25 @@ def _inspect(
     return {state_field: evidence, "tool_calls": [call]}
 
 
+def _queue_graph(tool: QueueTool) -> StateGraph:
+    graph = StateGraph(DiagnosisState)
+    graph.add_node("inspect_queue", partial(_inspect, "queue", tool.inspect_queue))
+    graph.add_node("report", _write_report)
+    graph.add_edge(START, "inspect_queue")
+    graph.add_edge("report", END)
+    return graph
+
+
+def run_queue_diagnosis(question: str, tool: QueueTool) -> DiagnosisReport:
+    graph = _queue_graph(tool)
+    graph.add_edge("inspect_queue", "report")
+    return graph.compile().invoke({"question": question})["report"]
+
+
 def run_diagnosis(
     question: str, tools: DiagnosticTools, processing_tool: ProcessingTool
 ) -> DiagnosisReport:
-    graph = StateGraph(DiagnosisState)
-    graph.add_node("inspect_queue", partial(_inspect, "queue", tools.inspect_queue))
+    graph = _queue_graph(tools)
     graph.add_node(
         "inspect_consumer", partial(_inspect, "consumer", tools.inspect_consumer)
     )
@@ -217,10 +238,7 @@ def run_diagnosis(
         "inspect_processing",
         partial(_inspect, "processing", processing_tool.inspect_processing),
     )
-    graph.add_node("report", _write_report)
-    graph.add_edge(START, "inspect_queue")
     graph.add_conditional_edges("inspect_queue", _after_queue)
     graph.add_conditional_edges("inspect_consumer", _after_consumer)
     graph.add_edge("inspect_processing", "report")
-    graph.add_edge("report", END)
     return graph.compile().invoke({"question": question})["report"]
