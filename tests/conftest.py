@@ -22,6 +22,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store_true",
         help="Run the Java processing target contract test and use Java in live acceptance.",
     )
+    parser.addoption(
+        "--hirehub-live",
+        action="store_true",
+        help="Run read-only acceptance against a prepared HireHub test delivery.",
+    )
 
 
 @contextmanager

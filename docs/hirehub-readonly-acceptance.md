@@ -74,11 +74,29 @@ New-Item -ItemType Directory -Force .opspilot | Out-Null
 
 报告直接记录 MySQL 表和 RabbitMQ Management 请求地址。无法关联唯一 Outbox 消息时，已读取的队列指标仍可作为环境证据保留。需要保存原始快照以便复查时，使用 `capture-hirehub` 导出。
 
+## 重跑直连验收
+
+使用一个已准备好的隔离投递用例和前述只读凭据。在运行测试期间保持 Notification 的状态稳定。验收测试读取单个投递与通知队列，报告写入 pytest 临时目录。
+
+```powershell
+$env:OPSPILOT_TEST_HIREHUB_MANAGEMENT_URL = "http://127.0.0.1:15673"
+$env:OPSPILOT_TEST_HIREHUB_MYSQL_PORT = "13306"
+$env:OPSPILOT_TEST_HIREHUB_DELIVERY_ID = "1001"
+$env:OPSPILOT_TEST_HIREHUB_RECIPIENT_ID = "4002"
+$env:OPSPILOT_TEST_HIREHUB_MESSAGE_ID = "<该投递的 Outbox 消息 ID>"
+$env:OPSPILOT_TEST_HIREHUB_NOTIFICATION = "not_observed"
+.\.venv\Scripts\python.exe -m pytest tests/test_hirehub_live.py --hirehub-live -q
+```
+
+默认连接本机 MySQL 和 RabbitMQ 的 `/` 虚拟主机。可使用 `OPSPILOT_TEST_HIREHUB_MYSQL_HOST` 与 `OPSPILOT_TEST_HIREHUB_VHOST` 指定其他隔离环境。Notification 暂停且消息仍积压时，用 `not_observed` 验证授权查询返回零行；换成缺少通知日志表读取权限的账号时，用 `unknown` 验证查询失败；恢复消费且队列清空后，用 `observed` 验证处理记录。三种场景分别运行测试，默认 pytest 跳过此验收。
+
 ## 真实验收结果
 
 隔离环境运行 `15ee3f9` 的 Delivery、Job、Notification，以及 MySQL 8.0.46、Redis 和 RabbitMQ 3.13.7。预置合成投递及 Outbox 记录后，由真实服务发送和消费消息。Elasticsearch 索引的启动检查使用本地测试响应。
 
 首轮验收通过临时脚本导出快照。随后以 OpsPilot `416e185` 的 `capture-hirehub` 在相同版本的隔离环境复验，通过 MySQL `SELECT` 和 RabbitMQ Management `GET` 直接采集三份快照，并用 `diagnose-hirehub` 生成报告。
+
+OpsPilot `27ecb1a` 的实时 `diagnose-hirehub` 入口已通过 `--hirehub-live` 的三轮复验。三轮都直接连接隔离服务，从实时证据生成和保存报告。
 
 | 场景 | 观测结果 | Notification 分支 |
 | --- | --- | --- |
