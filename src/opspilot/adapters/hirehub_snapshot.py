@@ -3,6 +3,7 @@
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from math import inf
 from pathlib import Path
 from typing import Any, get_args
 
@@ -86,6 +87,9 @@ class _Snapshot:
 
         evidence["observed_at"] = observed_at
         evidence["outcome"] = outcome
+        duration_ms = section.get("duration_ms")
+        if type(duration_ms) in (int, float) and 0 <= duration_ms < inf:
+            evidence["duration_ms"] = duration_ms
         if outcome != "observed":
             timed_out = outcome == "timeout"
             allowed = _RABBITMQ_FAILURE_REASONS if name == "queue" else _MYSQL_FAILURE_REASONS

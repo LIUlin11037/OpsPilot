@@ -23,6 +23,7 @@ _EVIDENCE_FIELDS = {
     "recorded_at": "Recorded at",
     "sent_at": "Sent at",
     "acknowledged_at": "Acknowledged at",
+    "duration_ms": "Read duration (ms)",
     "reason": "Reason",
     "mysql_error_code": "MySQL error code",
     "http_status": "HTTP status",

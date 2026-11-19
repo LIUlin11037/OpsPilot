@@ -13,6 +13,22 @@ EXAMPLE = Path(__file__).resolve().parents[1] / "examples/hirehub-notification-s
 MESSAGE_ID = "sample-delivery-event-1001"
 
 
+def test_snapshot_ignores_invalid_durations_but_keeps_zero() -> None:
+    data = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    data["delivery"]["duration_ms"] = -1
+    data["outbox"]["duration_ms"] = True
+    data["job"]["duration_ms"] = float("inf")
+    data["notification"]["duration_ms"] = "10"
+    data["queue"]["duration_ms"] = 0
+
+    trace = HireHubSnapshotAdapter.inspect_data(data, 1001)
+
+    assert {
+        item["checkpoint"]: item["duration_ms"]
+        for item in trace["checks"] if "duration_ms" in item
+    } == {"queue": 0}
+
+
 def test_hirehub_cli_saves_a_branch_with_no_processing_rows() -> None:
     with TemporaryDirectory(prefix="opspilot-hirehub-test-") as directory:
         result = subprocess.run(
@@ -53,6 +69,7 @@ def test_hirehub_cli_saves_a_branch_with_no_processing_rows() -> None:
         "branches": {"job": "observed", "notification": "not_observed"},
     }
     checks = {item["checkpoint"]: item for item in report["evidence"]}
+    assert all("duration_ms" not in evidence for evidence in checks.values())
     assert checks["delivery"]["status"] == "PENDING"
     assert checks["outbox"]["status"] == "CONFIRMED"
     assert checks["outbox"]["expected_recipient_listed"] is True

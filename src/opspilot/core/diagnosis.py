@@ -61,6 +61,7 @@ class TraceEvidenceFields(Observation):
 
 
 class TraceEvidence(TraceEvidenceFields, total=False):
+    duration_ms: float
     branch: str
     consumer: str
     status: str

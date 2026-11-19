@@ -10,6 +10,7 @@ from opspilot.__main__ import main
 from opspilot.adapters.hirehub_snapshot import HireHubSnapshotAdapter
 from opspilot.connectors.mysql import MySQLConnector, MySQLRead
 from opspilot.connectors.rabbitmq import RabbitMQQueueConnector
+from opspilot.core import diagnosis
 from opspilot.core.target_trace import run_target_trace
 
 OBSERVED_AT = "2026-11-19T06:00:00+00:00"
@@ -30,12 +31,15 @@ def test_hirehub_cli_live_reads_produce_diagnosable_evidence(
     monkeypatch, capsys, command, notification_outcome, branch_status
 ) -> None:
     queries = []
+    clock_ns = 0
 
     def select(self, query, parameters):
+        nonlocal clock_ns
         assert (self.host, self.port, self.username, self.password) == (
             "127.0.0.1", 13306, "mysql-reader", "mysql-secret"
         )
         queries.append(parameters)
+        clock_ns += len(queries) * 1_000_000
         assert query.lstrip().startswith("SELECT ")
         if "hirehub_delivery.delivery" in query:
             return MySQLRead("observed", OBSERVED_AT, ({"delivery_id": 1001, "status": "PENDING"},))
@@ -60,6 +64,8 @@ def test_hirehub_cli_live_reads_produce_diagnosable_evidence(
         return MySQLRead(notification_outcome, OBSERVED_AT)
 
     def inspect_queue(self):
+        nonlocal clock_ns
+        clock_ns += 5_000_000
         assert (self.queue, self.vhost) == ("hirehub.notification.msg", "/test")
         return {
             "outcome": "observed", "source": QUEUE_SOURCE, "observed_at": OBSERVED_AT,
@@ -69,6 +75,7 @@ def test_hirehub_cli_live_reads_produce_diagnosable_evidence(
 
     monkeypatch.setattr(MySQLConnector, "select", select)
     monkeypatch.setattr(RabbitMQQueueConnector, "inspect_queue", inspect_queue)
+    monkeypatch.setattr(diagnosis, "perf_counter_ns", lambda: clock_ns)
     monkeypatch.setenv("OPSPILOT_MYSQL_USER", "mysql-reader")
     monkeypatch.setenv("OPSPILOT_MYSQL_PASSWORD", "mysql-secret")
     monkeypatch.setenv("OPSPILOT_RABBITMQ_USER", "rabbit-reader")
@@ -103,6 +110,12 @@ def test_hirehub_cli_live_reads_produce_diagnosable_evidence(
                        (MESSAGE_ID, "notification")]
     assert report["target_trace"]["branches"] == {"job": "observed", "notification": branch_status}
     checks = {item["checkpoint"]: item for item in report["evidence"]}
+    assert {name: check["duration_ms"] for name, check in checks.items()} == {
+        "delivery": 1, "outbox": 2, "job": 3, "notification": 4, "queue": 5,
+    }
+    assert report["tool_calls"][0]["duration_ms"] == (
+        15 if command == "diagnose-hirehub" else 0
+    )
     assert checks["outbox"]["expected_recipient_listed"] is False
     assert checks["outbox"]["sent_at"] == "2026-11-19T05:59:00+00:00"
     assert ("row_count" in checks["notification"]) == (notification_outcome == "observed")

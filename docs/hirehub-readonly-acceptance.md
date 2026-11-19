@@ -64,6 +64,8 @@ New-Item -ItemType Directory -Force .opspilot | Out-Null
 
 采集命令输出最小字段。接收人核对只保留布尔值或未知值。各来源分别记录读取时间和结果，单项查询失败时保留其他可读取的证据。
 
+新采集的每个检查点会记录 `duration_ms`，使用单调时钟测量 MySQL 查询或 RabbitMQ Management 读取的耗时。超时和读取失败同样保留耗时。读取快照时，报告复用采集时的耗时。早期快照没有该字段时，证据省略它。`tool_calls` 中的耗时仍表示本次整体取证调用。
+
 采集失败时，快照和诊断报告会记录 `reason`，例如 `access_denied`、`authentication_failed`、`transport_error` 或 `request_timeout`。有可用的错误码时，也会记录 `mysql_error_code` 或 `http_status`。快照仅保留受支持的原因和数字错误码。早期快照缺少这些字段时，报告沿用 `source_unavailable` 或 `source_timeout`。
 
 ## 直接诊断隔离环境

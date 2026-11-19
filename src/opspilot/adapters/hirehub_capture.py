@@ -5,8 +5,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from opspilot.adapters.hirehub_snapshot import CONSUMERS, HireHubSnapshotAdapter
-from opspilot.connectors.mysql import MySQLConnector, MySQLRead
+from opspilot.connectors.mysql import MySQLConnector
 from opspilot.connectors.rabbitmq import RabbitMQQueueConnector
+from opspilot.core.diagnosis import measure_tool_call
 from opspilot.core.target_trace import TargetTraceRead
 
 _DELIVERY = "SELECT id AS delivery_id, status FROM hirehub_delivery.delivery WHERE id = %s"
@@ -28,8 +29,15 @@ _CONSUME_LOGS = {
 }
 
 
-def _section(read: MySQLRead) -> dict[str, Any]:
-    section: dict[str, Any] = {"outcome": read.outcome, "observed_at": read.observed_at}
+def _read_mysql_section(
+    mysql: MySQLConnector, query: str, parameters: tuple[int | str, ...]
+) -> dict[str, Any]:
+    read, duration_ms = measure_tool_call(lambda: mysql.select(query, parameters))
+    section: dict[str, Any] = {
+        "outcome": read.outcome,
+        "observed_at": read.observed_at,
+        "duration_ms": duration_ms,
+    }
     if read.outcome == "observed":
         section["rows"] = [
             {
@@ -56,15 +64,15 @@ def capture_hirehub_snapshot(
     delivery_id: int,
     recipient_id: int,
 ) -> dict[str, Any]:
-    delivery = mysql.select(_DELIVERY, (delivery_id,))
+    delivery = _read_mysql_section(mysql, _DELIVERY, (delivery_id,))
     snapshot = {
         "environment": environment,
         "vhost": rabbitmq.vhost,
         "delivery_id": delivery_id,
-        "delivery": _section(delivery),
+        "delivery": delivery,
     }
-    if len(delivery.rows) == 1:
-        snapshot["outbox"] = outbox = _section(mysql.select(_OUTBOX, (recipient_id, delivery_id)))
+    if len(delivery.get("rows", [])) == 1:
+        snapshot["outbox"] = outbox = _read_mysql_section(mysql, _OUTBOX, (recipient_id, delivery_id))
         rows = outbox.get("rows", [])
         for row in rows:
             match = row["expected_recipient_listed"]
@@ -77,15 +85,16 @@ def capture_hirehub_snapshot(
                         "SELECT message_id, consumer, create_time AS recorded_at "
                         f"FROM {_CONSUME_LOGS[branch]} WHERE message_id = %s AND consumer = %s"
                     )
-                    read = mysql.select(query, (message_id, consumer))
-                    snapshot[branch] = dict(_section(read), message_id=message_id, consumer=consumer)
+                    section = _read_mysql_section(mysql, query, (message_id, consumer))
+                    snapshot[branch] = dict(section, message_id=message_id, consumer=consumer)
 
-    queue = rabbitmq.inspect_queue()
+    queue, duration_ms = measure_tool_call(rabbitmq.inspect_queue)
     queue_section = {
         "name": rabbitmq.queue,
         "source": queue["source"],
         "outcome": queue["outcome"],
         "observed_at": queue["observed_at"],
+        "duration_ms": duration_ms,
         "pending_messages": queue.get("pending_messages"),
         "unacknowledged_messages": queue.get("unacknowledged_messages"),
         "registered_consumers": queue.get("registered_consumers"),

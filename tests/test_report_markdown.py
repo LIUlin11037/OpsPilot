@@ -64,6 +64,7 @@ def test_trace_markdown_preserves_zero_rows_and_unavailable_checks(
 ) -> None:
     snapshot = json.loads(EXAMPLE.read_text(encoding="utf-8"))
     snapshot["notification"]["outcome"] = notification_outcome
+    snapshot["notification"]["duration_ms"] = 12.5
     path = report_db.parent / "snapshot.json"
     path.write_text(json.dumps(snapshot), encoding="utf-8")
     report = run_target_trace("Check notification", 1001, HireHubSnapshotAdapter(path))
@@ -78,6 +79,7 @@ def test_trace_markdown_preserves_zero_rows_and_unavailable_checks(
     assert "- **job branch** observed" in output
     assert "Registered consumers 0" in output
     notification = next(line for line in output.splitlines() if line.startswith("| notification |"))
+    assert "Read duration (ms) 12.5" in notification
     assert r"hirehub\_notification.mq\_consume\_log" in notification
     assert "snapshot.json#notification" in notification
     if notification_outcome == "observed":
