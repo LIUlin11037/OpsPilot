@@ -124,10 +124,13 @@ def test_unavailable_notification_check_does_not_become_zero_rows(
     assert "notification processing status is unknown" in report["conclusion"]
 
 
-def test_ambiguous_outbox_stops_the_message_trace() -> None:
+@pytest.mark.parametrize("queue_captured", [True, False])
+def test_ambiguous_outbox_stops_the_message_trace(queue_captured: bool) -> None:
     data = json.loads(EXAMPLE.read_text(encoding="utf-8"))
     outbox = data["outbox"]["rows"]
     outbox.append({**outbox[0], "message_id": "another-creation-event"})
+    if not queue_captured:
+        data.pop("queue")
     with TemporaryDirectory(prefix="opspilot-hirehub-test-") as directory:
         path = Path(directory) / "snapshot.json"
         path.write_text(json.dumps(data), encoding="utf-8")
@@ -135,9 +138,13 @@ def test_ambiguous_outbox_stops_the_message_trace() -> None:
 
     assert report["target_trace"]["message_id"] is None
     assert report["target_trace"]["branches"] == {"job": "unknown", "notification": "unknown"}
-    assert [item["checkpoint"] for item in report["evidence"]] == ["delivery", "outbox"]
+    checkpoints = ["delivery", "outbox"]
+    if queue_captured:
+        checkpoints.append("queue")
+        assert report["evidence"][2]["pending_messages"] == 1
+    assert [item["checkpoint"] for item in report["evidence"]] == checkpoints
     assert report["evidence"][1]["reason"] == "ambiguous_rows"
-    (follow_up,) = report["next_checks"]
+    follow_up = report["next_checks"][0]
     assert (follow_up["action"], follow_up["evidence_index"]) == ("verify_lookup", 1)
 
 

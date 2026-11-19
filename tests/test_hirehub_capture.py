@@ -140,8 +140,9 @@ def test_hirehub_cli_live_reads_produce_diagnosable_evidence(
 
 
 @pytest.mark.parametrize("queue_denied", [False, True])
-def test_live_diagnosis_preserves_queue_when_delivery_lookup_times_out(
-    monkeypatch, capsys, queue_denied
+@pytest.mark.parametrize("replay", [False, True])
+def test_diagnosis_preserves_queue_when_delivery_lookup_times_out(
+    monkeypatch, capsys, queue_denied, replay
 ) -> None:
     def select(self, query, parameters):
         assert "hirehub_delivery.delivery" in query and parameters == (1001,)
@@ -159,18 +160,33 @@ def test_live_diagnosis_preserves_queue_when_delivery_lookup_times_out(
         "OPSPILOT_RABBITMQ_USER", "OPSPILOT_RABBITMQ_PASSWORD",
     ):
         monkeypatch.setenv(name, "test")
-    with TemporaryDirectory(prefix="opspilot-hirehub-live-test-") as directory:
+    with TemporaryDirectory(prefix="opspilot-hirehub-partial-test-") as directory:
         database = Path(directory) / "reports.sqlite3"
+        options = LIVE_OPTIONS
+        captured = None
+        if replay:
+            monkeypatch.setattr(sys, "argv", ["opspilot", "capture-hirehub", *LIVE_OPTIONS])
+            main()
+            output = capsys.readouterr().out
+            captured = json.loads(output)
+            snapshot = Path(directory) / "partial.json"
+            snapshot.write_text(output, encoding="utf-8")
+            options = ["--snapshot", str(snapshot), "--delivery-id", "1001"]
         monkeypatch.setattr(sys, "argv", [
-            "opspilot", "--db", str(database), "diagnose-hirehub", *LIVE_OPTIONS, "Check notification",
+            "opspilot", "--db", str(database), "diagnose-hirehub", *options, "Check notification",
         ])
         main()
         report = json.loads(capsys.readouterr().out)
 
     assert report["target_trace"]["message_id"] is None
+    assert report["processing_correlation"] is None
     assert report["target_trace"]["branches"] == {"job": "unknown", "notification": "unknown"}
     assert [check["checkpoint"] for check in report["evidence"]] == ["delivery", "queue"]
     assert report["evidence"][0]["outcome"] == "timeout"
+    assert "message_id" not in report["evidence"][1]
+    if captured is not None:
+        assert report["evidence"][1]["duration_ms"] == captured["queue"]["duration_ms"]
+        assert report["evidence"][1]["source"] == f"{snapshot.as_uri()}#queue"
     if queue_denied:
         assert report["evidence"][1]["reason"] == "access_denied"
         assert report["evidence"][1]["http_status"] == 403

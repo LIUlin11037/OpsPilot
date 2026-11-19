@@ -230,7 +230,7 @@ class HireHubSnapshotAdapter:
 
         snapshot = _Snapshot(data, file_source, captured_at)
         trace = cls._correlate(snapshot, entity_id, environment, vhost)
-        if file_source is None or trace["message_id"] is not None:
+        if "queue" in data or file_source is None or trace["message_id"] is not None:
             trace["checks"].append(snapshot.queue())
         if file_source is None and not any(check["outcome"] == "observed" for check in trace["checks"]):
             trace["outcome"] = trace["checks"][0]["outcome"]

@@ -76,7 +76,7 @@ New-Item -ItemType Directory -Force .opspilot | Out-Null
 .\.venv\Scripts\python.exe -m opspilot diagnose-hirehub --environment hirehub-local --delivery-id 1001 --recipient-id 4002 --mysql-host 127.0.0.1 --mysql-port 13306 --management-url http://127.0.0.1:15673 --vhost "/" "投递成功，但 HR 未收到站内通知"
 ```
 
-报告直接记录 MySQL 表和 RabbitMQ Management 请求地址。无法关联唯一 Outbox 消息时，已读取的队列指标仍可作为环境证据保留。需要保存原始快照以便复查时，使用 `capture-hirehub` 导出。
+实时报告直接记录 MySQL 表和 RabbitMQ Management 请求地址。实时诊断和离线回放都会保留已采集的队列检查点，即使当前无法关联唯一的 Outbox 消息。队列指标反映整个队列，消费分支状态在消息关联建立前为 `unknown`。需要保存原始快照以便复查时，使用 `capture-hirehub` 导出。
 
 ## 对比复查前后的报告
 
