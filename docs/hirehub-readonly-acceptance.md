@@ -78,7 +78,13 @@ New-Item -ItemType Directory -Force .opspilot | Out-Null
 
 ## 对比复查前后的报告
 
-对同一消息提交两次诊断后，用 `reports` 查找任务 ID，再按基准、复查的顺序传给 `compare-hirehub`。两份报告须保存在同一个 SQLite 数据库，并匹配环境、虚拟主机、投递 ID 和已定位的消息 ID。
+对同一消息提交两次诊断后，用 `reports --delivery-id` 查找任务 ID。也可以用 `--environment` 按环境精确筛选。带筛选的列表会返回 `target_trace`，包含环境、虚拟主机、投递 ID、消息 ID 和消费分支状态。`--limit` 应用于筛选后的结果。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot reports --delivery-id 1001 --environment hirehub-local --limit 5
+```
+
+把选中的任务 ID 按基准、复查的顺序传给 `compare-hirehub`。两份报告须保存在同一个 SQLite 数据库，并匹配环境、虚拟主机、投递 ID 和已定位的消息 ID。
 
 ```powershell
 .\.venv\Scripts\python.exe -m opspilot compare-hirehub "BEFORE_TASK_ID" "AFTER_TASK_ID"

@@ -11,7 +11,7 @@ import pytest
 from opspilot.adapters.hirehub_snapshot import HireHubSnapshotAdapter
 from opspilot.core.target_trace import run_target_trace
 from opspilot.report_comparison import compare_trace_reports
-from opspilot.task_store import StoredReport, save_report
+from opspilot.task_store import StoredReport, list_reports, save_report
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples/hirehub-notification-snapshot.json"
 
@@ -104,3 +104,39 @@ def test_compare_requires_resolved_trace_identity(saved_pair) -> None:
     after.pop("target_trace")
     with pytest.raises(ValueError, match="must refer to HireHub trace reports"):
         compare_trace_reports(before, after)
+
+
+def test_reports_filters_hirehub_history_before_applying_limit(saved_pair) -> None:
+    database, before, after = saved_pair
+    other_environment = deepcopy(after)
+    other_environment["target_trace"]["environment"] = "other-lab"
+    foreign = save_report(database, other_environment)
+    other_delivery = deepcopy(after)
+    other_delivery["target_trace"]["entity_id"] = 1002
+    save_report(database, other_delivery)
+    save_report(database, {
+        "question": "Check queue",
+        "status": "undetermined",
+        "conclusion": "Queue depth is unknown.",
+        "processing_correlation": None,
+        "evidence": [],
+    })
+    original = database.read_bytes()
+
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "opspilot", "--db", str(database), "reports",
+            "--delivery-id", "1001", "--environment", "hirehub-acceptance-sample", "--limit", "2",
+        ],
+        cwd=database.parent, capture_output=True, text=True, encoding="utf-8", timeout=20,
+    )
+
+    assert result.returncode == 0, result.stderr
+    rows = json.loads(result.stdout)
+    assert [row["task_id"] for row in rows] == [after["task_id"], before["task_id"]]
+    assert [row["target_trace"] for row in rows] == [after["target_trace"], before["target_trace"]]
+    assert [row["task_id"] for row in list_reports(database, limit=1, delivery_id=1001)] == [
+        foreign["task_id"]
+    ]
+    assert list_reports(database, limit=20, environment="missing-lab") == []
+    assert database.read_bytes() == original

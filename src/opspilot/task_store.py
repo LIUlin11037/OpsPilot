@@ -7,17 +7,21 @@ from pathlib import Path
 from typing import TypedDict
 from uuid import uuid4
 
-from opspilot.core.diagnosis import DiagnosisReport, DiagnosisStatus
+from opspilot.core.diagnosis import DiagnosisReport, DiagnosisStatus, TargetTraceSummary
 
 
 class StoredReport(DiagnosisReport):
     task_id: str
 
 
-class ReportSummary(TypedDict):
+class ReportSummaryFields(TypedDict):
     task_id: str
     question: str
     status: DiagnosisStatus
+
+
+class ReportSummary(ReportSummaryFields, total=False):
+    target_trace: TargetTraceSummary
 
 
 def _open_read_only(database: Path) -> sqlite3.Connection:
@@ -57,19 +61,36 @@ def load_report(database: Path, task_id: str) -> StoredReport | None:
     return {**report, "task_id": task_id}
 
 
-def list_reports(database: Path, *, limit: int) -> list[ReportSummary]:
+def list_reports(
+    database: Path, *, limit: int, delivery_id: int | None = None, environment: str | None = None
+) -> list[ReportSummary]:
     if not database.exists():
         return []
 
+    filter_trace = delivery_id is not None or environment is not None
     summaries: list[ReportSummary] = []
     with closing(_open_read_only(database)) as connection:
         # The original report table has a rowid and no save timestamp.
+        # Trace filters apply to stored payloads, so the limit counts matching reports.
         rows = connection.execute(
-            "SELECT task_id, payload FROM reports ORDER BY rowid DESC LIMIT ?", (limit,)
+            "SELECT task_id, payload FROM reports ORDER BY rowid DESC LIMIT ?",
+            (-1 if filter_trace else limit,),
         )
         for task_id, payload in rows:
             report: DiagnosisReport = json.loads(payload)
-            summaries.append({
+            summary: ReportSummary = {
                 "task_id": task_id, "question": report["question"], "status": report["status"],
-            })
+            }
+            if filter_trace:
+                trace = report.get("target_trace")
+                if (
+                    trace is None
+                    or (delivery_id is not None and trace["entity_id"] != delivery_id)
+                    or (environment is not None and trace["environment"] != environment)
+                ):
+                    continue
+                summary["target_trace"] = trace
+            summaries.append(summary)
+            if len(summaries) == limit:
+                break
     return summaries

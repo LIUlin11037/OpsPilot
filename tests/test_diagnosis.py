@@ -320,6 +320,22 @@ def test_reports_rejects_invalid_limits(cli_directory: Path, limit: str) -> None
     assert not (cli_directory / ".opspilot").exists()
 
 
+@pytest.mark.parametrize(
+    ("flag", "value", "error"), [
+        ("--delivery-id", "0", "--delivery-id must be positive"),
+        ("--environment", "   ", "--environment must not be empty"),
+    ]
+)
+def test_reports_rejects_invalid_trace_filters(
+    cli_directory: Path, flag: str, value: str, error: str
+) -> None:
+    result = _run_cli(cli_directory, "reports", flag, value, check=False)
+
+    assert result.returncode == 2
+    assert error in result.stderr
+    assert not (cli_directory / ".opspilot").exists()
+
+
 def test_report_lookup_with_no_database_does_not_create_one(cli_directory: Path) -> None:
     task_id = "f0f34b73-e48f-4ea5-b689-02d2edf3e301"
 

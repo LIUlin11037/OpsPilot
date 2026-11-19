@@ -49,6 +49,8 @@ JSON 报告包含任务 ID、用户提交的问题、诊断状态和结论。每
 
 可以先用 `reports` 找到任务 ID。列表按保存顺序从新到旧返回任务 ID、问题和诊断状态，默认最多 20 条。没有报告时返回空列表。
 
+查找 HireHub 复查记录时，可以按 `--delivery-id` 或 `--environment` 筛选。 [HireHub 报告对比](docs/hirehub-readonly-acceptance.md#对比复查前后的报告)
+
 ```powershell
 .\.venv\Scripts\python.exe -m opspilot reports --limit 5
 ```

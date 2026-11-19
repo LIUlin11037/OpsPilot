@@ -195,6 +195,8 @@ def main() -> None:
     report_command.add_argument("--format", choices=("json", "markdown"), default="json")
     reports_command = commands.add_parser("reports", help="List recently saved reports.")
     reports_command.add_argument("--limit", type=int, default=20, help="Maximum reports (default: 20).")
+    reports_command.add_argument("--delivery-id", type=int, help="Match a HireHub delivery ID.")
+    reports_command.add_argument("--environment", help="Match a HireHub environment label.")
     compare = commands.add_parser("compare-hirehub", help="Compare saved reports for one HireHub event.")
     compare.add_argument("before_task_id", help="Task ID of the baseline report.")
     compare.add_argument("after_task_id", help="Task ID of the follow-up report.")
@@ -234,7 +236,15 @@ def main() -> None:
         if args.command == "reports":
             if not 0 < args.limit < 2**63:
                 reports_command.error("--limit must be a positive 64-bit integer")
-            print(json.dumps(list_reports(args.db, limit=args.limit), indent=2))
+            if args.delivery_id is not None and args.delivery_id <= 0:
+                reports_command.error("--delivery-id must be positive")
+            environment = args.environment
+            if environment is not None and not environment.strip():
+                reports_command.error("--environment must not be empty")
+            summaries = list_reports(
+                args.db, limit=args.limit, delivery_id=args.delivery_id, environment=environment
+            )
+            print(json.dumps(summaries, indent=2))
             return
         if args.command == "compare-hirehub":
             before = _require_report(args.db, args.before_task_id, parser)
