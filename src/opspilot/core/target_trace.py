@@ -7,10 +7,12 @@ from langgraph.graph import END, START, StateGraph
 from opspilot.core.diagnosis import (
     BranchStatus,
     DiagnosisReport,
+    Evidence,
     ObservationOutcome,
     ToolCall,
     TraceEvidence,
     measure_tool_call,
+    suggest_next_checks,
 )
 
 
@@ -83,6 +85,7 @@ def run_target_trace(
             else:
                 summary.append(f"{branch} processing status is unknown.")
         summary.append("The root cause is undetermined.")
+        evidence: list[Evidence] = list(trace["checks"])
 
         return {
             "report": {
@@ -97,8 +100,9 @@ def run_target_trace(
                     "message_id": trace["message_id"],
                     "branches": branches,
                 },
-                "evidence": list(trace["checks"]),
+                "evidence": evidence,
                 "tool_calls": [state["call"]],
+                "next_checks": suggest_next_checks(evidence),
             }
         }
 

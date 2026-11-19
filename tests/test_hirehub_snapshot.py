@@ -120,6 +120,8 @@ def test_ambiguous_outbox_stops_the_message_trace() -> None:
     assert report["target_trace"]["branches"] == {"job": "unknown", "notification": "unknown"}
     assert [item["checkpoint"] for item in report["evidence"]] == ["delivery", "outbox"]
     assert report["evidence"][1]["reason"] == "ambiguous_rows"
+    (follow_up,) = report["next_checks"]
+    assert (follow_up["action"], follow_up["evidence_index"]) == ("verify_lookup", 1)
 
 
 def test_snapshot_scope_must_match_the_requested_delivery() -> None:

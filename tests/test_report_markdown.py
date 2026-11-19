@@ -72,6 +72,8 @@ def test_trace_markdown_preserves_zero_rows_and_unavailable_checks(
     output = _read_report(report_db, stored["task_id"], "--format", "markdown")
 
     assert "## Target trace" in output
+    assert "## Suggested read-only checks" in output
+    assert f"- **notification** {report['next_checks'][0]['description']}" in output
     assert "- **Message ID** sample-delivery-event-1001" in output
     assert "- **job branch** observed" in output
     assert "Registered consumers 0" in output
@@ -107,3 +109,4 @@ def test_markdown_supports_reports_saved_before_tool_call_data(report_db: Path) 
     assert early_report["conclusion"] in output
     assert r"| inspect\_queue | timeout |  |  | legacy\|source | 2026-11-19T06:00:00+00:00 |" in output
     assert "## Tool calls" not in output
+    assert "## Suggested read-only checks" not in output

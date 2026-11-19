@@ -75,6 +75,13 @@ def render_markdown(report: StoredReport) -> str:
             for branch, status in trace["branches"].items()
         )
 
+    if report.get("next_checks"):
+        lines.extend(["", "## Suggested read-only checks", ""])
+        for check in report["next_checks"]:
+            item = report["evidence"][check["evidence_index"]]
+            label = item.get("checkpoint", item["tool"])
+            lines.append(f"- **{_value(label)}** {_value(check['description'])}")
+
     lines.extend(["", "## Evidence", ""])
     if report["evidence"]:
         lines.extend([

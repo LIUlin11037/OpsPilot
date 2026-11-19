@@ -126,10 +126,71 @@ class TargetTraceSummary(TypedDict):
     branches: dict[str, BranchStatus]
 
 
+NextCheckAction = Literal[
+    "retry_read",
+    "verify_read_access",
+    "verify_source",
+    "verify_lookup",
+    "inspect_consumer_health",
+    "inspect_processing_logs",
+]
+
+
+class NextCheck(TypedDict):
+    action: NextCheckAction
+    evidence_index: int
+    description: str
+
+
 class DiagnosisReport(DiagnosisReportFields, total=False):
     tool_calls: list[ToolCall]
     requested_message_id: str
     target_trace: TargetTraceSummary
+    next_checks: list[NextCheck]
+
+
+_NEXT_CHECK_DESCRIPTIONS: dict[NextCheckAction, str] = {
+    "retry_read": "Collect a fresh read for the same scope and compare it with this observation.",
+    "verify_read_access": "Verify that the configured read-only account can access this source.",
+    "verify_source": "Verify the configured source and its availability before repeating the read.",
+    "verify_lookup": "Verify the lookup keys and expected scope, then inspect the matching records.",
+    "inspect_consumer_health": "Read the consumer service health and recent subscription logs.",
+    "inspect_processing_logs": "Read logs for the observed processing attempt to verify its error and message ID.",
+}
+
+
+def _next_check_action(evidence: Evidence) -> NextCheckAction | None:
+    if evidence["outcome"] == "timeout":
+        return "retry_read"
+    if evidence["outcome"] == "missing":
+        if evidence.get("reason") in ("access_denied", "authentication_failed"):
+            return "verify_read_access"
+        return "verify_source"
+    if evidence.get("reason") == "ambiguous_rows":
+        return "verify_lookup"
+    if evidence.get("row_count") == 0:
+        return "retry_read" if "branch" in evidence else "verify_lookup"
+    pending = evidence.get("pending_messages")
+    if evidence.get("running") is False or (
+        isinstance(pending, int) and pending > 0 and evidence.get("registered_consumers") == 0
+    ):
+        return "inspect_consumer_health"
+    if evidence.get("result") == "failed":
+        return "inspect_processing_logs"
+    return None
+
+
+def suggest_next_checks(evidence: list[Evidence]) -> list[NextCheck]:
+    checks: list[NextCheck] = []
+    for index, item in enumerate(evidence):
+        action = _next_check_action(item)
+        if action is not None:
+            checks.append({
+                "action": action,
+                "evidence_index": index,
+                "description": _NEXT_CHECK_DESCRIPTIONS[action],
+            })
+    return checks
 
 
 class DiagnosisInput(TypedDict):
@@ -312,6 +373,7 @@ def _write_report(state: DiagnosisState) -> dict[str, DiagnosisReport]:
         report["evidence"].append(consumer)
     if processing is not None:
         report["evidence"].append(processing)
+    report["next_checks"] = suggest_next_checks(report["evidence"])
     return {"report": report}
 
 

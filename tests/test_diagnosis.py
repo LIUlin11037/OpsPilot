@@ -77,12 +77,15 @@ def test_cli_diagnoses_simulated_queue(
     assert queue["pending_messages"] == pending_messages
     if scenario == "normal":
         assert remaining == []
+        assert report["next_checks"] == []
     else:
         (consumer,) = remaining
         assert consumer["tool"] == "inspect_consumer"
         assert consumer["source"] == "simulated:consumer"
         assert consumer["outcome"] == "observed"
         assert consumer["running"] is False
+        (follow_up,) = report["next_checks"]
+        assert (follow_up["action"], follow_up["evidence_index"]) == ("inspect_consumer_health", 1)
 
 
 def test_queue_timeout_leaves_queue_depth_unknown(cli_directory: Path) -> None:
@@ -95,6 +98,8 @@ def test_queue_timeout_leaves_queue_depth_unknown(cli_directory: Path) -> None:
     assert queue["source"] == "simulated:queue"
     assert queue["outcome"] == "timeout"
     assert "pending_messages" not in queue
+    (follow_up,) = report["next_checks"]
+    assert (follow_up["action"], follow_up["evidence_index"]) == ("retry_read", 0)
 
 
 def test_missing_consumer_data_preserves_observed_backlog(cli_directory: Path) -> None:

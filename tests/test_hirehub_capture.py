@@ -111,6 +111,13 @@ def test_hirehub_cli_live_reads_produce_diagnosable_evidence(
         assert checks["notification"]["mysql_error_code"] == 1142
     if notification_outcome == "timeout":
         assert checks["notification"]["reason"] == "request_timeout"
+    assert [
+        (check["action"], report["evidence"][check["evidence_index"]]["checkpoint"])
+        for check in report["next_checks"]
+    ] == [
+        ("verify_read_access" if notification_outcome == "missing" else "retry_read", "notification"),
+        ("inspect_consumer_health", "queue"),
+    ]
     assert checks["queue"]["registered_consumers"] == 0
     if command == "diagnose-hirehub":
         assert checks["notification"]["source"] == "MySQL/hirehub_notification.mq_consume_log"
