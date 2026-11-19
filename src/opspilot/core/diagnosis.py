@@ -29,6 +29,7 @@ class QueueEvidenceFields(Observation):
 
 class QueueEvidence(QueueEvidenceFields, total=False):
     registered_consumers: int | None
+    unacknowledged_messages: int | None
 
 
 class ConsumerEvidence(Observation):
@@ -128,6 +129,36 @@ def _correlate_processing(
     return "not_in_sample"
 
 
+def _conclude_queue_snapshot(queue: QueueEvidence) -> tuple[DiagnosisStatus, str]:
+    acknowledgement = ""
+    if "unacknowledged_messages" in queue:
+        unacknowledged = queue["unacknowledged_messages"]
+        if unacknowledged is None:
+            acknowledgement = " The unacknowledged message count is unavailable."
+        else:
+            acknowledgement = (
+                " The count of delivered messages awaiting acknowledgement is "
+                f"{unacknowledged}."
+            )
+
+    pending = queue["pending_messages"]
+    if pending <= 0:
+        return (
+            "no_backlog_observed",
+            f"No pending messages were observed in the queue.{acknowledgement}",
+        )
+
+    registered = queue.get("registered_consumers")
+    if registered is None:
+        registration = "The registered consumer count is unavailable."
+    else:
+        registration = f"The broker reports a registered consumer count of {registered}."
+    return "undetermined", (
+        f"The broker reports a pending message count of {pending}.{acknowledgement} "
+        f"{registration} The cause of the backlog is undetermined."
+    )
+
+
 def _conclude(
     state: DiagnosisState, correlation: ProcessingCorrelation | None
 ) -> tuple[DiagnosisStatus, str]:
@@ -138,19 +169,7 @@ def _conclude(
 
     consumer = state.get("consumer")
     if consumer is None:
-        if queue["pending_messages"] > 0:
-            registered = queue.get("registered_consumers")
-            if registered is None:
-                registration = "The registered consumer count is unavailable."
-            else:
-                registration = (
-                    f"The broker reports a registered consumer count of {registered}."
-                )
-            return "undetermined", (
-                "The queue has pending messages. "
-                f"{registration} The cause of the backlog is undetermined."
-            )
-        return "no_backlog_observed", "No pending messages were observed in the queue."
+        return _conclude_queue_snapshot(queue)
 
     if consumer["outcome"] != "observed":
         failure = _describe_failure(consumer["outcome"])

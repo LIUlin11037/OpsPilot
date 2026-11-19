@@ -59,7 +59,7 @@ JSON 报告包含任务 ID、用户提交的问题、诊断状态和结论。每
 .\.venv\Scripts\python.exe -m opspilot inspect-queue --management-url http://127.0.0.1:15672 --vhost "/" --queue "orders"
 ```
 
-`inspect-queue` 将单个队列的 `messages_ready` 映射为 `pending_messages`，将同一次响应中的 `consumers` 映射为 `registered_consumers`。缺失或无效的注册数记为 `null`，有效的零值保留为 `0`。查询只读取队列指标，消息 ID 样本为空。待投递数不可用时，命令输出失败原因并以状态码 1 退出，同时保留可用的注册数。 [RabbitMQ 队列指标文档](https://www.rabbitmq.com/docs/monitoring#individual-queue-metrics) · [消费者指标定义](https://www.rabbitmq.com/docs/man/rabbitmqctl.8#consumers)
+`inspect-queue` 从同一次响应读取三个指标。`messages_ready` 映射为待投递数 `pending_messages`，`messages_unacknowledged` 映射为已投递待确认数 `unacknowledged_messages`，`consumers` 映射为消费者注册数 `registered_consumers`。缺失或无效的待确认数及注册数记为 `null`，有效的零值保留为 `0`。查询只读取队列指标，消息 ID 样本为空。待投递数不可用时，命令输出失败原因并以状态码 1 退出，同时保留其他有效指标。 [RabbitMQ 队列指标文档](https://www.rabbitmq.com/docs/monitoring#individual-queue-metrics) · [消费者指标定义](https://www.rabbitmq.com/docs/man/rabbitmqctl.8#consumers)
 
 将相同的连接参数传给 `diagnose`，可以把这条队列观测纳入诊断报告并保存任务 ID。
 
@@ -67,4 +67,4 @@ JSON 报告包含任务 ID、用户提交的问题、诊断状态和结论。每
 .\.venv\Scripts\python.exe -m opspilot diagnose --management-url http://127.0.0.1:15672 --queue "orders" "这个队列有积压吗？"
 ```
 
-RabbitMQ 模式保留队列证据及读取耗时。发现积压时，结论会写明 broker 报告的注册数或该指标不可用。注册数反映队列订阅情况，积压原因仍标为 `undetermined`。
+RabbitMQ 模式保留队列证据及读取耗时。报告分别描述待投递数和已投递待确认数。待投递数为零时，`no_backlog_observed` 仅表示当次未观测到等待投递的消息，报告仍会列出待确认数。发现待投递积压时，报告也会说明消费者注册数，根因标为 `undetermined`。

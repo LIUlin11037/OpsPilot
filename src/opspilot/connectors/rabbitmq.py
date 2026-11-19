@@ -34,12 +34,17 @@ class RabbitMQUnavailableEvidence(UnavailableEvidence):
     reason: FailureReason
     http_status: int | None
     registered_consumers: int | None
+    unacknowledged_messages: int | None
 
 
 def _path_segment(name: str) -> str:
     if name in (".", ".."):
         return name.replace(".", "%2E")
     return quote(name, safe="")
+
+
+def _nonnegative_count(value: object) -> int | None:
+    return value if type(value) is int and value >= 0 else None
 
 
 @dataclass(frozen=True)
@@ -81,6 +86,7 @@ class RabbitMQQueueConnector:
             status: int | None = None,
             *,
             registered_consumers: int | None = None,
+            unacknowledged_messages: int | None = None,
         ) -> RabbitMQUnavailableEvidence:
             return {
                 "tool": "inspect_queue",
@@ -90,6 +96,7 @@ class RabbitMQQueueConnector:
                 "reason": reason,
                 "http_status": status,
                 "registered_consumers": registered_consumers,
+                "unacknowledged_messages": unacknowledged_messages,
             }
 
         credentials = b64encode(f"{self.username}:{self.password}".encode()).decode("ascii")
@@ -123,18 +130,18 @@ class RabbitMQQueueConnector:
         if not isinstance(data, dict):
             return unavailable("invalid_response", 200)
 
-        registered = data.get("consumers")
-        registered_consumers = (
-            registered if type(registered) is int and registered >= 0 else None
+        registered_consumers = _nonnegative_count(data.get("consumers"))
+        unacknowledged_messages = _nonnegative_count(
+            data.get("messages_unacknowledged")
         )
-        pending_messages = data.get("messages_ready")
+        raw_pending = data.get("messages_ready")
+        pending_messages = _nonnegative_count(raw_pending)
         if pending_messages is None:
             return unavailable(
-                "metric_missing", 200, registered_consumers=registered_consumers
-            )
-        if type(pending_messages) is not int or pending_messages < 0:
-            return unavailable(
-                "invalid_response", 200, registered_consumers=registered_consumers
+                "metric_missing" if raw_pending is None else "invalid_response",
+                200,
+                registered_consumers=registered_consumers,
+                unacknowledged_messages=unacknowledged_messages,
             )
 
         return {
@@ -144,5 +151,6 @@ class RabbitMQQueueConnector:
             "outcome": "observed",
             "pending_messages": pending_messages,
             "registered_consumers": registered_consumers,
+            "unacknowledged_messages": unacknowledged_messages,
             "sampled_pending_message_ids": [],
         }
