@@ -40,6 +40,11 @@ def _section(read: MySQLRead) -> dict[str, Any]:
             }
             for row in read.rows
         ]
+    else:
+        if read.reason is not None:
+            section["reason"] = read.reason
+        if read.mysql_error_code is not None:
+            section["mysql_error_code"] = read.mysql_error_code
     return section
 
 
@@ -76,7 +81,7 @@ def capture_hirehub_snapshot(
                     snapshot[branch] = dict(_section(read), message_id=message_id, consumer=consumer)
 
     queue = rabbitmq.inspect_queue()
-    snapshot["queue"] = {
+    queue_section = {
         "name": rabbitmq.queue,
         "source": queue["source"],
         "outcome": queue["outcome"],
@@ -85,6 +90,11 @@ def capture_hirehub_snapshot(
         "unacknowledged_messages": queue.get("unacknowledged_messages"),
         "registered_consumers": queue.get("registered_consumers"),
     }
+    if queue["outcome"] != "observed":
+        queue_section["reason"] = queue["reason"]
+        if queue["http_status"] is not None:
+            queue_section["http_status"] = queue["http_status"]
+    snapshot["queue"] = queue_section
     snapshot["captured_at"] = datetime.now(timezone.utc).isoformat()
     return snapshot
 

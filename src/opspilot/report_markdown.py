@@ -24,6 +24,7 @@ _EVIDENCE_FIELDS = {
     "sent_at": "Sent at",
     "acknowledged_at": "Acknowledged at",
     "reason": "Reason",
+    "mysql_error_code": "MySQL error code",
     "http_status": "HTTP status",
 }
 

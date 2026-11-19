@@ -51,6 +51,12 @@ def test_hirehub_cli_live_reads_produce_diagnosable_evidence(
                 "recorded_at": datetime(2026, 11, 19, 5, 59),
             },))
         assert "hirehub_notification.mq_consume_log" in query
+        if notification_outcome == "missing":
+            return MySQLRead(
+                "missing", OBSERVED_AT, reason="access_denied", mysql_error_code=1142
+            )
+        if notification_outcome == "timeout":
+            return MySQLRead("timeout", OBSERVED_AT, reason="request_timeout")
         return MySQLRead(notification_outcome, OBSERVED_AT)
 
     def inspect_queue(self):
@@ -100,6 +106,11 @@ def test_hirehub_cli_live_reads_produce_diagnosable_evidence(
     assert checks["outbox"]["expected_recipient_listed"] is False
     assert checks["outbox"]["sent_at"] == "2026-11-19T05:59:00+00:00"
     assert ("row_count" in checks["notification"]) == (notification_outcome == "observed")
+    if notification_outcome == "missing":
+        assert checks["notification"]["reason"] == "access_denied"
+        assert checks["notification"]["mysql_error_code"] == 1142
+    if notification_outcome == "timeout":
+        assert checks["notification"]["reason"] == "request_timeout"
     assert checks["queue"]["registered_consumers"] == 0
     if command == "diagnose-hirehub":
         assert checks["notification"]["source"] == "MySQL/hirehub_notification.mq_consume_log"
@@ -108,20 +119,21 @@ def test_hirehub_cli_live_reads_produce_diagnosable_evidence(
         assert checks["queue"]["source"] == f"{path.as_uri()}#queue"
 
 
-def test_live_diagnosis_preserves_queue_when_delivery_lookup_times_out(monkeypatch, capsys) -> None:
+@pytest.mark.parametrize("queue_denied", [False, True])
+def test_live_diagnosis_preserves_queue_when_delivery_lookup_times_out(
+    monkeypatch, capsys, queue_denied
+) -> None:
     def select(self, query, parameters):
         assert "hirehub_delivery.delivery" in query and parameters == (1001,)
         return MySQLRead("timeout", OBSERVED_AT)
 
     monkeypatch.setattr(MySQLConnector, "select", select)
-    monkeypatch.setattr(
-        RabbitMQQueueConnector,
-        "inspect_queue",
-        lambda self: {
-            "outcome": "observed", "source": QUEUE_SOURCE, "observed_at": OBSERVED_AT,
-            "pending_messages": 2,
-        },
-    )
+    queue_result = {"source": QUEUE_SOURCE, "observed_at": OBSERVED_AT}
+    if queue_denied:
+        queue_result.update(outcome="missing", reason="access_denied", http_status=403)
+    else:
+        queue_result.update(outcome="observed", pending_messages=2)
+    monkeypatch.setattr(RabbitMQQueueConnector, "inspect_queue", lambda self: queue_result)
     for name in (
         "OPSPILOT_MYSQL_USER", "OPSPILOT_MYSQL_PASSWORD",
         "OPSPILOT_RABBITMQ_USER", "OPSPILOT_RABBITMQ_PASSWORD",
@@ -139,7 +151,11 @@ def test_live_diagnosis_preserves_queue_when_delivery_lookup_times_out(monkeypat
     assert report["target_trace"]["branches"] == {"job": "unknown", "notification": "unknown"}
     assert [check["checkpoint"] for check in report["evidence"]] == ["delivery", "queue"]
     assert report["evidence"][0]["outcome"] == "timeout"
-    assert report["evidence"][1]["pending_messages"] == 2
+    if queue_denied:
+        assert report["evidence"][1]["reason"] == "access_denied"
+        assert report["evidence"][1]["http_status"] == 403
+    else:
+        assert report["evidence"][1]["pending_messages"] == 2
 
 
 @pytest.mark.parametrize("options", [

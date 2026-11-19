@@ -3,9 +3,24 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from math import ceil, isfinite
-from typing import Any
+from typing import Any, Literal
 
 from opspilot.core.diagnosis import ObservationOutcome
+
+MySQLFailureReason = Literal[
+    "authentication_failed", "access_denied", "transport_error", "request_timeout", "query_error"
+]
+_MYSQL_ERROR_REASONS: dict[int, MySQLFailureReason] = {
+    1044: "access_denied",
+    1045: "authentication_failed",
+    1142: "access_denied",
+    1143: "access_denied",
+    2002: "transport_error",
+    2003: "transport_error",
+    2005: "transport_error",
+    2006: "transport_error",
+    2013: "transport_error",
+}
 
 
 @dataclass(frozen=True)
@@ -13,6 +28,8 @@ class MySQLRead:
     outcome: ObservationOutcome
     observed_at: str
     rows: tuple[dict[str, Any], ...] = ()
+    reason: MySQLFailureReason | None = None
+    mysql_error_code: int | None = None
 
 
 @dataclass(frozen=True)
@@ -56,8 +73,16 @@ class MySQLConnector:
                 cursor.execute(query, parameters)
                 rows = tuple(cursor.fetchall())
         except TimeoutError:
-            return MySQLRead("timeout", timestamp())
+            return MySQLRead("timeout", timestamp(), reason="request_timeout")
         except pymysql.MySQLError as error:
             cause = getattr(error, "original_exception", None) or error.__context__
-            return MySQLRead("timeout" if isinstance(cause, TimeoutError) else "missing", timestamp())
+            code = error.args[0] if error.args and type(error.args[0]) is int else None
+            if isinstance(cause, TimeoutError):
+                return MySQLRead(
+                    "timeout", timestamp(), reason="request_timeout", mysql_error_code=code
+                )
+            reason = (
+                _MYSQL_ERROR_REASONS.get(code, "query_error") if code is not None else "query_error"
+            )
+            return MySQLRead("missing", timestamp(), reason=reason, mysql_error_code=code)
         return MySQLRead("observed", timestamp(), rows)

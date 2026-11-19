@@ -64,6 +64,8 @@ New-Item -ItemType Directory -Force .opspilot | Out-Null
 
 采集命令输出最小字段。接收人核对只保留布尔值或未知值。各来源分别记录读取时间和结果，单项查询失败时保留其他可读取的证据。
 
+采集失败时，快照和诊断报告会记录 `reason`，例如 `access_denied`、`authentication_failed`、`transport_error` 或 `request_timeout`。有可用的错误码时，也会记录 `mysql_error_code` 或 `http_status`。快照仅保留受支持的原因和数字错误码。早期快照缺少这些字段时，报告沿用 `source_unavailable` 或 `source_timeout`。
+
 ## 直接诊断隔离环境
 
 使用相同的依赖和只读凭据，`diagnose-hirehub` 可在一次运行中采集并保存报告。

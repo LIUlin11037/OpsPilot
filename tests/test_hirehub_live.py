@@ -78,6 +78,9 @@ def test_hirehub_live_diagnosis_and_report(
     assert checks["notification"]["outcome"] == outcome
     assert ("row_count" in checks["notification"]) == (rows is not None)
     assert checks["notification"].get("row_count") == rows
+    if state == "unknown":
+        assert checks["notification"]["reason"] == "access_denied"
+        assert checks["notification"]["mysql_error_code"] in (1044, 1142, 1143)
     assert checks["queue"]["outcome"] == "observed"
     assert checks["queue"]["pending_messages"] == pending
     assert checks["queue"]["unacknowledged_messages"] == 0

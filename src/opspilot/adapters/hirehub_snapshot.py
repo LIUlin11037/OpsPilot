@@ -4,8 +4,10 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
+from opspilot.connectors.mysql import MySQLFailureReason
+from opspilot.connectors.rabbitmq import FailureReason as RabbitMQFailureReason
 from opspilot.core.diagnosis import TraceEvidence
 from opspilot.core.target_trace import TargetTraceRead
 
@@ -18,6 +20,8 @@ _ORIGINS = {
     "notification": "hirehub_notification.mq_consume_log",
     "queue": f"RabbitMQ/{NOTIFICATION_QUEUE}",
 }
+_MYSQL_FAILURE_REASONS = get_args(MySQLFailureReason)
+_RABBITMQ_FAILURE_REASONS = get_args(RabbitMQFailureReason)
 
 
 def _timestamp(value: object) -> str | None:
@@ -83,9 +87,25 @@ class _Snapshot:
         evidence["observed_at"] = observed_at
         evidence["outcome"] = outcome
         if outcome != "observed":
-            evidence["reason"] = (
-                "source_timeout" if outcome == "timeout" else "source_unavailable"
-            )
+            timed_out = outcome == "timeout"
+            allowed = _RABBITMQ_FAILURE_REASONS if name == "queue" else _MYSQL_FAILURE_REASONS
+            reason = section.get("reason")
+            if (
+                isinstance(reason, str)
+                and reason in allowed
+                and (reason == "request_timeout") == timed_out
+            ):
+                evidence["reason"] = reason
+            else:
+                evidence["reason"] = "source_timeout" if timed_out else "source_unavailable"
+            if name == "queue":
+                status = _nonnegative_count(section.get("http_status"))
+                if status is not None and 100 <= status <= 599:
+                    evidence["http_status"] = status
+            else:
+                code = _nonnegative_count(section.get("mysql_error_code"))
+                if code is not None and 0 < code <= 65535:
+                    evidence["mysql_error_code"] = code
         return evidence, section
 
     def rows(

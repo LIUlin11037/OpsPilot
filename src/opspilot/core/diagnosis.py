@@ -71,6 +71,8 @@ class TraceEvidence(TraceEvidenceFields, total=False):
     sent_at: str
     acknowledged_at: str
     reason: str
+    mysql_error_code: int
+    http_status: int
     pending_messages: int | None
     unacknowledged_messages: int | None
     registered_consumers: int | None

@@ -80,6 +80,8 @@ def test_hirehub_cli_saves_a_branch_with_no_processing_rows() -> None:
     [
         ({"outcome": "timeout"}, "timeout", "source_timeout"),
         ({"outcome": "missing"}, "missing", "source_unavailable"),
+        ({"outcome": "missing", "reason": "unexpected raw error"}, "missing", "source_unavailable"),
+        ({"outcome": "timeout", "reason": "access_denied"}, "timeout", "source_timeout"),
         ({"message_id": "a-different-message"}, "missing", "message_id_mismatch"),
         ({"consumer": "job-delivery-count"}, "missing", "consumer_mismatch"),
         ({"rows": None}, "missing", "invalid_rows"),
