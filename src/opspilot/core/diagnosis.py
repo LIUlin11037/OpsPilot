@@ -1,10 +1,15 @@
 """Evidence-driven workflow for the queue backlog case."""
 
-from typing import Literal, Protocol, TypedDict
+from collections.abc import Callable
+from functools import partial
+from operator import add
+from time import perf_counter_ns
+from typing import Annotated, Literal, Protocol, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
 UnavailableOutcome = Literal["timeout", "missing"]
+ToolName = Literal["inspect_queue", "inspect_consumer", "inspect_processing"]
 ProcessingResult = Literal["succeeded", "failed"]
 ProcessingCorrelation = Literal["matched", "not_in_sample", "unknown"]
 DiagnosisStatus = Literal["no_backlog_observed", "consumer_stopped", "undetermined"]
@@ -36,8 +41,17 @@ class ProcessingEvidence(Observation):
 
 
 class UnavailableEvidence(Observation):
-    tool: Literal["inspect_queue", "inspect_consumer", "inspect_processing"]
+    tool: ToolName
     outcome: UnavailableOutcome
+
+
+Evidence = QueueEvidence | ConsumerEvidence | ProcessingEvidence | UnavailableEvidence
+
+
+class ToolCall(TypedDict):
+    tool: ToolName
+    outcome: Literal["observed", UnavailableOutcome]
+    duration_ms: float
 
 
 class DiagnosticTools(Protocol):
@@ -50,14 +64,16 @@ class ProcessingTool(Protocol):
     def inspect_processing(self) -> ProcessingEvidence | UnavailableEvidence: ...
 
 
-class DiagnosisReport(TypedDict):
+class DiagnosisReportFields(TypedDict):
     question: str
     status: DiagnosisStatus
     conclusion: str
     processing_correlation: ProcessingCorrelation | None
-    evidence: list[
-        QueueEvidence | ConsumerEvidence | ProcessingEvidence | UnavailableEvidence
-    ]
+    evidence: list[Evidence]
+
+
+class DiagnosisReport(DiagnosisReportFields, total=False):
+    tool_calls: list[ToolCall]
 
 
 class DiagnosisInput(TypedDict):
@@ -68,6 +84,7 @@ class DiagnosisState(DiagnosisInput, total=False):
     queue: QueueEvidence | UnavailableEvidence
     consumer: ConsumerEvidence | UnavailableEvidence
     processing: ProcessingEvidence | UnavailableEvidence
+    tool_calls: Annotated[list[ToolCall], add]
     report: DiagnosisReport
 
 
@@ -162,6 +179,7 @@ def _write_report(state: DiagnosisState) -> dict[str, DiagnosisReport]:
         "conclusion": conclusion,
         "processing_correlation": correlation,
         "evidence": [queue],
+        "tool_calls": state["tool_calls"],
     }
     consumer = state.get("consumer")
     if consumer is not None:
@@ -171,28 +189,34 @@ def _write_report(state: DiagnosisState) -> dict[str, DiagnosisReport]:
     return {"report": report}
 
 
+def _inspect(
+    state_field: Literal["queue", "consumer", "processing"],
+    tool: Callable[[], Evidence],
+    _state: DiagnosisState,
+) -> dict[str, Evidence | list[ToolCall]]:
+    started_ns = perf_counter_ns()
+    evidence = tool()
+    duration_ms = (perf_counter_ns() - started_ns) / 1_000_000
+    call: ToolCall = {
+        "tool": evidence["tool"],
+        "outcome": evidence["outcome"],
+        "duration_ms": duration_ms,
+    }
+    return {state_field: evidence, "tool_calls": [call]}
+
+
 def run_diagnosis(
     question: str, tools: DiagnosticTools, processing_tool: ProcessingTool
 ) -> DiagnosisReport:
-    def inspect_queue(
-        _state: DiagnosisState,
-    ) -> dict[str, QueueEvidence | UnavailableEvidence]:
-        return {"queue": tools.inspect_queue()}
-
-    def inspect_consumer(
-        _state: DiagnosisState,
-    ) -> dict[str, ConsumerEvidence | UnavailableEvidence]:
-        return {"consumer": tools.inspect_consumer()}
-
-    def inspect_processing(
-        _state: DiagnosisState,
-    ) -> dict[str, ProcessingEvidence | UnavailableEvidence]:
-        return {"processing": processing_tool.inspect_processing()}
-
     graph = StateGraph(DiagnosisState)
-    graph.add_node("inspect_queue", inspect_queue)
-    graph.add_node("inspect_consumer", inspect_consumer)
-    graph.add_node("inspect_processing", inspect_processing)
+    graph.add_node("inspect_queue", partial(_inspect, "queue", tools.inspect_queue))
+    graph.add_node(
+        "inspect_consumer", partial(_inspect, "consumer", tools.inspect_consumer)
+    )
+    graph.add_node(
+        "inspect_processing",
+        partial(_inspect, "processing", processing_tool.inspect_processing),
+    )
     graph.add_node("report", _write_report)
     graph.add_edge(START, "inspect_queue")
     graph.add_conditional_edges("inspect_queue", _after_queue)

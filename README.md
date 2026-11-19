@@ -39,6 +39,8 @@ python -m venv .venv
 
 JSON 报告包含任务 ID、用户提交的问题、诊断状态和结论。每条证据记录工具、来源、UTC 观察时间及结果类型 `outcome`。结果为 `observed` 时附带观测值。模拟场景直接返回 `timeout` 或 `missing`，便于离线复现。
 
+新报告的 `tool_calls` 按调用顺序记录工具名、结果类型和耗时 `duration_ms`。耗时用单调时钟测量，覆盖工具调用本身。模拟超时会立即返回 `timeout`，因此仍可能只有很短的耗时。早期保存的报告可按其原始内容读取。
+
 ## 回看诊断报告
 
 `diagnose` 会先把报告保存到当前目录下的 `.opspilot/reports.sqlite3`，然后输出包含 `task_id` 的 JSON。用实际的任务 ID 替换示例中的 `TASK_ID`，即可读取同一份报告。

@@ -11,8 +11,13 @@ import pytest
 
 from opspilot.adapters.simulated import SimulatedProcessingAdapter
 from opspilot.connectors.simulated import SimulatedQueueConnector
-from opspilot.core.diagnosis import ProcessingResult, UnavailableOutcome, run_diagnosis
-from opspilot.task_store import StoredReport
+from opspilot.core.diagnosis import (
+    DiagnosisReport,
+    ProcessingResult,
+    UnavailableOutcome,
+    run_diagnosis,
+)
+from opspilot.task_store import StoredReport, save_report
 
 
 @pytest.fixture
@@ -43,6 +48,10 @@ def _diagnose_from_cli(scenario: str, directory: Path) -> StoredReport:
     for evidence in report["evidence"]:
         timestamp = datetime.fromisoformat(evidence["observed_at"])
         assert timestamp.utcoffset() == timedelta(0)
+    assert [(call["tool"], call["outcome"]) for call in report["tool_calls"]] == [
+        (evidence["tool"], evidence["outcome"]) for evidence in report["evidence"]
+    ]
+    assert all(call["duration_ms"] >= 0 for call in report["tool_calls"])
     return report
 
 
@@ -201,6 +210,23 @@ def test_correlation_is_unknown_when_an_id_is_unavailable(
     assert "Message correlation is unknown." in report["conclusion"]
 
 
+def test_tool_call_durations_are_measured_individually(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticks = iter((0, 1_000_000, 4_000_000, 6_500_000, 7_000_000, 10_000_000))
+    monkeypatch.setattr("opspilot.core.diagnosis.perf_counter_ns", lambda: next(ticks))
+    tools = SimulatedQueueConnector(pending_messages=3, consumer_running=True)
+    adapter = SimulatedProcessingAdapter(latest_result="timeout")
+
+    report = run_diagnosis("Messages are stuck in the queue", tools, adapter)
+
+    assert report["tool_calls"] == [
+        {"tool": "inspect_queue", "outcome": "observed", "duration_ms": 1.0},
+        {"tool": "inspect_consumer", "outcome": "observed", "duration_ms": 2.5},
+        {"tool": "inspect_processing", "outcome": "timeout", "duration_ms": 3.0},
+    ]
+
+
 def test_reports_are_retrievable_across_cli_processes(cli_directory: Path) -> None:
     database = cli_directory / "reports # local" / "diagnoses.sqlite3"
     database_option = ("--db", str(database))
@@ -231,6 +257,22 @@ def test_reports_are_retrievable_across_cli_processes(cli_directory: Path) -> No
         assert UUID(report["task_id"]).version == 4
         result = _run_cli(cli_directory, *database_option, "report", report["task_id"])
         assert json.loads(result.stdout) == report
+
+
+def test_early_report_can_be_read_without_tool_call_data(cli_directory: Path) -> None:
+    database = cli_directory / "reports.sqlite3"
+    legacy: DiagnosisReport = {
+        "question": "Check queue",
+        "status": "no_backlog_observed",
+        "conclusion": "No pending messages were observed in the queue.",
+        "processing_correlation": None,
+        "evidence": [SimulatedQueueConnector(0, True).inspect_queue()],
+    }
+    stored = save_report(database, legacy)
+
+    result = _run_cli(cli_directory, "--db", str(database), "report", stored["task_id"])
+
+    assert json.loads(result.stdout) == stored
 
 
 def test_report_lookup_with_no_database_does_not_create_one(cli_directory: Path) -> None:
