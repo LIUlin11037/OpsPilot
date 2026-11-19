@@ -43,7 +43,15 @@ JSON 报告包含任务 ID、用户提交的问题、诊断状态和结论。每
 
 ## 回看诊断报告
 
-`diagnose` 会先把报告保存到当前目录下的 `.opspilot/reports.sqlite3`，然后输出包含 `task_id` 的 JSON。用实际的任务 ID 替换示例中的 `TASK_ID`，即可读取同一份报告。
+`diagnose` 会先把报告保存到当前目录下的 `.opspilot/reports.sqlite3`，然后输出包含 `task_id` 的 JSON。
+
+可以先用 `reports` 找到任务 ID。列表按保存顺序从新到旧返回任务 ID、问题和诊断状态，默认最多 20 条。没有报告时返回空列表。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot reports --limit 5
+```
+
+用列表中的任务 ID 替换 `TASK_ID`，即可读取完整报告。
 
 ```powershell
 .\.venv\Scripts\python.exe -m opspilot report "TASK_ID"

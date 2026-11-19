@@ -19,7 +19,7 @@ from opspilot.core.diagnosis import TargetProcessingTool, run_diagnosis, run_que
 from opspilot.core.startup import run_startup
 from opspilot.core.target_trace import run_target_trace
 from opspilot.report_markdown import render_markdown
-from opspilot.task_store import load_report, save_report
+from opspilot.task_store import list_reports, load_report, save_report
 
 
 def _add_queue_options(
@@ -185,6 +185,8 @@ def main() -> None:
     report_command = commands.add_parser("report", help="Show a saved report.")
     report_command.add_argument("task_id", help="Task ID returned by diagnose.")
     report_command.add_argument("--format", choices=("json", "markdown"), default="json")
+    reports_command = commands.add_parser("reports", help="List recently saved reports.")
+    reports_command.add_argument("--limit", type=int, default=20, help="Maximum reports (default: 20).")
     inspect_queue = commands.add_parser(
         "inspect-queue", help="Read queue metrics from RabbitMQ Management."
     )
@@ -218,6 +220,11 @@ def main() -> None:
         return
 
     try:
+        if args.command == "reports":
+            if not 0 < args.limit < 2**63:
+                reports_command.error("--limit must be a positive 64-bit integer")
+            print(json.dumps(list_reports(args.db, limit=args.limit), indent=2))
+            return
         if args.command == "report":
             stored_report = load_report(args.db, args.task_id)
             if stored_report is None:

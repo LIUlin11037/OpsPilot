@@ -275,6 +275,46 @@ def test_early_report_can_be_read_without_tool_call_data(cli_directory: Path) ->
     assert json.loads(result.stdout) == stored
 
 
+def test_reports_lists_recent_summaries_in_save_order(cli_directory: Path) -> None:
+    database = cli_directory / "report history # local" / "reports.sqlite3"
+    arguments = ("--db", str(database), "reports")
+    saved = [
+        save_report(database, {
+            "question": f"排查队列 {index}",
+            "status": "undetermined" if index % 2 else "no_backlog_observed",
+            "conclusion": "Saved diagnosis",
+            "processing_correlation": None,
+            "evidence": [],
+        })
+        for index in range(22)
+    ]
+    expected = [
+        {"task_id": report["task_id"], "question": report["question"], "status": report["status"]}
+        for report in reversed(saved)
+    ]
+    before = database.read_bytes()
+
+    assert json.loads(_run_cli(cli_directory, *arguments).stdout) == expected[:20]
+    assert json.loads(_run_cli(cli_directory, *arguments, "--limit", "2").stdout) == expected[:2]
+    assert database.read_bytes() == before
+
+
+def test_reports_with_no_database_does_not_create_one(cli_directory: Path) -> None:
+    result = _run_cli(cli_directory, "reports")
+
+    assert json.loads(result.stdout) == []
+    assert not (cli_directory / ".opspilot").exists()
+
+
+@pytest.mark.parametrize("limit", ["0", "9223372036854775808"])
+def test_reports_rejects_invalid_limits(cli_directory: Path, limit: str) -> None:
+    result = _run_cli(cli_directory, "reports", "--limit", limit, check=False)
+
+    assert result.returncode == 2
+    assert "--limit must be a positive 64-bit integer" in result.stderr
+    assert not (cli_directory / ".opspilot").exists()
+
+
 def test_report_lookup_with_no_database_does_not_create_one(cli_directory: Path) -> None:
     task_id = "f0f34b73-e48f-4ea5-b689-02d2edf3e301"
 
