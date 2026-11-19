@@ -4,12 +4,15 @@ from collections.abc import Callable
 from functools import partial
 from operator import add
 from time import perf_counter_ns
-from typing import Annotated, Literal, Protocol, TypedDict
+from typing import Annotated, Literal, Protocol, TypedDict, TypeVar
 
 from langgraph.graph import END, START, StateGraph
 
 UnavailableOutcome = Literal["timeout", "missing"]
-ToolName = Literal["inspect_queue", "inspect_consumer", "inspect_processing"]
+ObservationOutcome = Literal["observed", UnavailableOutcome]
+ToolName = Literal[
+    "inspect_queue", "inspect_consumer", "inspect_processing", "inspect_target_trace"
+]
 ProcessingResult = Literal["succeeded", "failed"]
 ProcessingCorrelation = Literal["matched", "not_in_sample", "unknown"]
 DiagnosisStatus = Literal["no_backlog_observed", "consumer_stopped", "undetermined"]
@@ -50,12 +53,37 @@ class UnavailableEvidence(Observation):
     outcome: UnavailableOutcome
 
 
-Evidence = QueueEvidence | ConsumerEvidence | ProcessingEvidence | UnavailableEvidence
+class TraceEvidenceFields(Observation):
+    tool: Literal["inspect_target_trace"]
+    checkpoint: str
+    outcome: ObservationOutcome
+    origin: str
+
+
+class TraceEvidence(TraceEvidenceFields, total=False):
+    branch: str
+    consumer: str
+    status: str
+    row_count: int
+    message_id: str
+    expected_recipient_listed: bool | None
+    recorded_at: str
+    sent_at: str
+    acknowledged_at: str
+    reason: str
+    pending_messages: int | None
+    unacknowledged_messages: int | None
+    registered_consumers: int | None
+
+
+Evidence = (
+    QueueEvidence | ConsumerEvidence | ProcessingEvidence | UnavailableEvidence | TraceEvidence
+)
 
 
 class ToolCall(TypedDict):
     tool: ToolName
-    outcome: Literal["observed", UnavailableOutcome]
+    outcome: ObservationOutcome
     duration_ms: float
 
 
@@ -85,9 +113,21 @@ class DiagnosisReportFields(TypedDict):
     evidence: list[Evidence]
 
 
+BranchStatus = Literal["observed", "not_observed", "unknown"]
+
+
+class TargetTraceSummary(TypedDict):
+    environment: str | None
+    vhost: str | None
+    entity_id: int
+    message_id: str | None
+    branches: dict[str, BranchStatus]
+
+
 class DiagnosisReport(DiagnosisReportFields, total=False):
     tool_calls: list[ToolCall]
     requested_message_id: str
+    target_trace: TargetTraceSummary
 
 
 class DiagnosisInput(TypedDict):
@@ -273,14 +313,21 @@ def _write_report(state: DiagnosisState) -> dict[str, DiagnosisReport]:
     return {"report": report}
 
 
+ToolResult = TypeVar("ToolResult")
+
+
+def measure_tool_call(tool: Callable[[], ToolResult]) -> tuple[ToolResult, float]:
+    started_ns = perf_counter_ns()
+    result = tool()
+    return result, (perf_counter_ns() - started_ns) / 1_000_000
+
+
 def _inspect(
     state_field: Literal["queue", "consumer", "processing"],
     tool: Callable[[], Evidence],
     _state: DiagnosisState,
 ) -> dict[str, Evidence | list[ToolCall]]:
-    started_ns = perf_counter_ns()
-    evidence = tool()
-    duration_ms = (perf_counter_ns() - started_ns) / 1_000_000
+    evidence, duration_ms = measure_tool_call(tool)
     call: ToolCall = {
         "tool": evidence["tool"],
         "outcome": evidence["outcome"],

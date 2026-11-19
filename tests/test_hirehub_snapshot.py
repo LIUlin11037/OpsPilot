@@ -1,0 +1,130 @@
+import json
+import subprocess
+import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+import pytest
+
+from opspilot.adapters.hirehub_snapshot import HireHubSnapshotAdapter
+from opspilot.core.target_trace import run_target_trace
+
+EXAMPLE = Path(__file__).resolve().parents[1] / "examples/hirehub-notification-snapshot.json"
+MESSAGE_ID = "sample-delivery-event-1001"
+
+
+def test_hirehub_cli_saves_a_branch_with_no_processing_rows() -> None:
+    with TemporaryDirectory(prefix="opspilot-hirehub-test-") as directory:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "opspilot",
+                "diagnose-hirehub",
+                "--snapshot",
+                str(EXAMPLE),
+                "--delivery-id",
+                "1001",
+                "投递成功，但 HR 未收到站内通知",
+            ],
+            cwd=directory,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        assert result.returncode == 0, result.stderr
+        report = json.loads(result.stdout)
+        saved = subprocess.run(
+            [sys.executable, "-m", "opspilot", "report", report["task_id"]],
+            cwd=directory,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    assert saved.returncode == 0, saved.stderr
+    assert json.loads(saved.stdout) == report
+    assert report["status"] == "undetermined"
+    assert report["processing_correlation"] == "unknown"
+    assert report["target_trace"] == {
+        "environment": "hirehub-acceptance-sample",
+        "vhost": "/",
+        "entity_id": 1001,
+        "message_id": MESSAGE_ID,
+        "branches": {"job": "observed", "notification": "not_observed"},
+    }
+    checks = {item["checkpoint"]: item for item in report["evidence"]}
+    assert checks["delivery"]["status"] == "PENDING"
+    assert checks["outbox"]["status"] == "CONFIRMED"
+    assert checks["outbox"]["expected_recipient_listed"] is True
+    assert checks["outbox"]["acknowledged_at"] == "2026-11-19T03:09:02+00:00"
+    assert checks["job"]["message_id"] == MESSAGE_ID
+    assert checks["job"]["origin"] == "hirehub_job.mq_consume_log"
+    assert checks["job"]["row_count"] == 1
+    assert checks["notification"]["origin"] == "hirehub_notification.mq_consume_log"
+    assert checks["notification"]["outcome"] == "observed"
+    assert checks["notification"]["row_count"] == 0
+    assert checks["notification"]["observed_at"] == "2026-11-19T03:10:00+00:00"
+    assert checks["queue"]["pending_messages"] == 1
+    assert checks["queue"]["registered_consumers"] == 0
+    assert "notification lookup succeeded and returned zero processing records" in (
+        report["conclusion"]
+    )
+    call, = report["tool_calls"]
+    assert call["tool"] == "inspect_target_trace"
+    assert call["outcome"] == "observed"
+    assert call["duration_ms"] >= 0
+
+
+@pytest.mark.parametrize(
+    ("changes", "outcome", "reason"),
+    [
+        ({"outcome": "timeout"}, "timeout", "source_timeout"),
+        ({"outcome": "missing"}, "missing", "source_unavailable"),
+        ({"message_id": "a-different-message"}, "missing", "message_id_mismatch"),
+        ({"consumer": "job-delivery-count"}, "missing", "consumer_mismatch"),
+        ({"rows": None}, "missing", "invalid_rows"),
+    ],
+)
+def test_unavailable_notification_check_does_not_become_zero_rows(
+    changes: dict, outcome: str, reason: str
+) -> None:
+    data = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    data["notification"].update(changes)
+    with TemporaryDirectory(prefix="opspilot-hirehub-test-") as directory:
+        path = Path(directory) / "snapshot.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        report = run_target_trace("Check notification", 1001, HireHubSnapshotAdapter(path))
+
+    assert report["status"] == "undetermined"
+    assert report["target_trace"]["branches"] == {"job": "observed", "notification": "unknown"}
+    evidence = next(item for item in report["evidence"] if item["checkpoint"] == "notification")
+    assert evidence["message_id"] == MESSAGE_ID
+    assert evidence["outcome"] == outcome
+    assert evidence["reason"] == reason
+    assert "row_count" not in evidence
+    assert "notification processing status is unknown" in report["conclusion"]
+
+
+def test_ambiguous_outbox_stops_the_message_trace() -> None:
+    data = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    outbox = data["outbox"]["rows"]
+    outbox.append({**outbox[0], "message_id": "another-creation-event"})
+    with TemporaryDirectory(prefix="opspilot-hirehub-test-") as directory:
+        path = Path(directory) / "snapshot.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        report = run_target_trace("Check notification", 1001, HireHubSnapshotAdapter(path))
+
+    assert report["target_trace"]["message_id"] is None
+    assert report["target_trace"]["branches"] == {"job": "unknown", "notification": "unknown"}
+    assert [item["checkpoint"] for item in report["evidence"]] == ["delivery", "outbox"]
+    assert report["evidence"][1]["reason"] == "ambiguous_rows"
+
+
+def test_snapshot_scope_must_match_the_requested_delivery() -> None:
+    report = run_target_trace("Check notification", 1002, HireHubSnapshotAdapter(EXAMPLE))
+
+    assert report["target_trace"]["entity_id"] == 1002
+    assert report["target_trace"]["message_id"] is None
+    evidence, = report["evidence"]
+    assert evidence["checkpoint"] == "snapshot"
+    assert evidence["reason"] == "delivery_id_mismatch"

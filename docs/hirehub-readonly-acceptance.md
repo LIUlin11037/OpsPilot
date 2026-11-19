@@ -1,6 +1,6 @@
 # HireHub 投递通知只读验收
 
-源码核对基线为 HireHub `15ee3f9`。本用例待在隔离实例执行，以下为验收设计与源码证据。
+源码核对基线为 HireHub `15ee3f9`。可用随仓库提供的合成快照执行离线验收，隔离 HireHub 实例的验证待后续运行。
 
 ## 验收用例
 
@@ -35,4 +35,16 @@
 - `DeliveryNotifyService` 在通知处理事务中写入幂等日志。接收人为空时会跳过通知创建，仍可写入消费日志。`NotificationService` 在提交后推送 WebSocket，因此站内可见性和实时收包需要各自的证据。
 - 投递详情 `GET /api/delivery/{id}` 会在 HR 查看时触发 `PENDING` 到 `VIEWED` 的迁移。验收通过 `delivery` 表的只读查询核对状态。
 
-OpsPilot 已具备 RabbitMQ 只读观测、按消息 ID 查处理记录和报告回看。接入此用例还需要 HireHub 侧的只读证据导出或独立适配器，用于解析 `deliveryId`、提供两个分支的查询结果，并区分成功查询的零行与数据源不可用。
+## 使用脱敏快照验收
+
+在 OpsPilot 根目录运行以下命令。样例的投递和消息 ID 为合成标识。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot diagnose-hirehub --snapshot "examples/hirehub-notification-snapshot.json" --delivery-id 1001 "投递成功，但 HR 未收到站内通知"
+```
+
+快照按一个环境、虚拟主机和投递 ID 保存。每个检查点记录 `outcome`，可用 `observed_at` 覆盖共同的带时区 `captured_at`。Job 和 Notification 检查点同时标明查询的 `message_id` 和 `consumer`，行记录也保留这两个键。
+
+报告的 `target_trace.branches` 应为 Job `observed`、Notification `not_observed`。Notification 证据中的 `outcome: "observed"` 表示查询成功，`row_count: 0` 表示没有查到匹配记录。将快照副本中 Notification 的 `outcome` 改为 `timeout` 或 `missing`，再次运行时该分支应为 `unknown`，并保留已经读到的 Job 与 Outbox 证据。缺少查询范围或键不匹配时，该分支也为 `unknown`。
+
+可用 `opspilot report TASK_ID` 回看完整报告。队列指标来自同一份快照，根因仍为 `undetermined`。下一阶段需要从隔离 HireHub 环境以只读方式导出同样的投递、Outbox、消费记录和队列指标。

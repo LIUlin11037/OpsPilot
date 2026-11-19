@@ -1,0 +1,52 @@
+{
+  "environment": "hirehub-acceptance-sample",
+  "vhost": "/",
+  "delivery_id": 1001,
+  "captured_at": "2026-11-19T03:10:00Z",
+  "delivery": {
+    "outcome": "observed",
+    "rows": [
+      {"delivery_id": 1001, "status": "PENDING"}
+    ]
+  },
+  "outbox": {
+    "outcome": "observed",
+    "rows": [
+      {
+        "delivery_id": 1001,
+        "biz_type": "DELIVERY_CREATED",
+        "routing_key": "delivery.created",
+        "message_id": "sample-delivery-event-1001",
+        "status": "CONFIRMED",
+        "expected_recipient_listed": true,
+        "sent_at": "2026-11-19T03:09:01Z",
+        "acknowledged_at": "2026-11-19T03:09:02Z"
+      }
+    ]
+  },
+  "job": {
+    "outcome": "observed",
+    "message_id": "sample-delivery-event-1001",
+    "consumer": "job-delivery-count",
+    "rows": [
+      {
+        "message_id": "sample-delivery-event-1001",
+        "consumer": "job-delivery-count",
+        "recorded_at": "2026-11-19T03:09:02Z"
+      }
+    ]
+  },
+  "notification": {
+    "outcome": "observed",
+    "message_id": "sample-delivery-event-1001",
+    "consumer": "notification",
+    "rows": []
+  },
+  "queue": {
+    "outcome": "observed",
+    "name": "hirehub.notification.msg",
+    "pending_messages": 1,
+    "unacknowledged_messages": 0,
+    "registered_consumers": 0
+  }
+}

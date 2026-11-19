@@ -6,6 +6,7 @@ import os
 import sqlite3
 from pathlib import Path
 
+from opspilot.adapters.hirehub_snapshot import HireHubSnapshotAdapter
 from opspilot.adapters.http_processing import HttpProcessingAdapter
 from opspilot.adapters.json_processing import JsonProcessingAdapter
 from opspilot.adapters.simulated import SimulatedProcessingAdapter
@@ -13,6 +14,7 @@ from opspilot.connectors.rabbitmq import RabbitMQQueueConnector
 from opspilot.connectors.simulated import SimulatedQueueConnector
 from opspilot.core.diagnosis import TargetProcessingTool, run_diagnosis, run_queue_diagnosis
 from opspilot.core.startup import run_startup
+from opspilot.core.target_trace import run_target_trace
 from opspilot.task_store import load_report, save_report
 
 
@@ -120,6 +122,12 @@ def main() -> None:
     )
     diagnose.add_argument("--message-id", help="Look up processing records for an exact ID.")
     diagnose.add_argument("question", help="Incident description.")
+    hirehub = commands.add_parser(
+        "diagnose-hirehub", help="Diagnose a delivery from a read-only HireHub snapshot."
+    )
+    hirehub.add_argument("--snapshot", type=Path, required=True)
+    hirehub.add_argument("--delivery-id", type=int, required=True)
+    hirehub.add_argument("question", help="Incident description.")
     report_command = commands.add_parser("report", help="Show a saved report.")
     report_command.add_argument("task_id", help="Task ID returned by diagnose.")
     inspect_queue = commands.add_parser(
@@ -150,6 +158,16 @@ def main() -> None:
             stored_report = load_report(args.db, args.task_id)
             if stored_report is None:
                 parser.exit(1, f"opspilot: no report found for task {args.task_id}\n")
+        elif args.command == "diagnose-hirehub":
+            question = args.question.strip()
+            if not question:
+                hirehub.error("question must not be empty")
+            if args.delivery_id <= 0:
+                hirehub.error("--delivery-id must be positive")
+            report = run_target_trace(
+                question, args.delivery_id, HireHubSnapshotAdapter(args.snapshot)
+            )
+            stored_report = save_report(args.db, report)
         else:
             question = args.question.strip()
             if not question:

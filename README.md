@@ -148,4 +148,4 @@ $env:OPSPILOT_RABBITMQ_PASSWORD = "opspilot_local_only"
 .\.venv\Scripts\python.exe -m pytest tests/test_rabbitmq_live.py --rabbitmq-live --java-target -q
 ```
 
-真实目标阶段选用 HireHub 的投递通知用例，证据来源和通过条件见 [HireHub 只读验收](docs/hirehub-readonly-acceptance.md)。
+真实目标阶段选用 HireHub 的投递通知用例。可用 `diagnose-hirehub` 读取随仓库提供的合成快照，验证投递、Outbox 和两个消费分支的关联。 [HireHub 只读验收](docs/hirehub-readonly-acceptance.md)
