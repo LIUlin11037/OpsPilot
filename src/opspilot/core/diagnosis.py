@@ -53,6 +53,13 @@ class UnavailableEvidence(Observation):
     outcome: UnavailableOutcome
 
 
+class UnavailableQueueEvidence(UnavailableEvidence, total=False):
+    """Queue reads may preserve independently observed counts."""
+
+    registered_consumers: int | None
+    unacknowledged_messages: int | None
+
+
 class TraceEvidenceFields(Observation):
     tool: Literal["inspect_target_trace"]
     checkpoint: str
@@ -91,7 +98,7 @@ class ToolCall(TypedDict):
 
 
 class QueueTool(Protocol):
-    def inspect_queue(self) -> QueueEvidence | UnavailableEvidence: ...
+    def inspect_queue(self) -> QueueEvidence | UnavailableQueueEvidence: ...
 
 
 class DiagnosticTools(QueueTool, Protocol):
@@ -200,7 +207,7 @@ class DiagnosisInput(TypedDict):
 
 class DiagnosisState(DiagnosisInput, total=False):
     requested_message_id: str
-    queue: QueueEvidence | UnavailableEvidence
+    queue: QueueEvidence | UnavailableQueueEvidence
     consumer: ConsumerEvidence | UnavailableEvidence
     processing: ProcessingEvidence | UnavailableEvidence
     tool_calls: Annotated[list[ToolCall], add]
@@ -218,10 +225,10 @@ def _after_queue_with_processing(
     state: DiagnosisState,
 ) -> Literal["inspect_processing", "report"]:
     queue = state["queue"]
-    if queue["outcome"] == "observed":
-        unacknowledged = queue.get("unacknowledged_messages") or 0
-        if queue["pending_messages"] > 0 or unacknowledged > 0:
-            return "inspect_processing"
+    if queue["outcome"] == "observed" and queue["pending_messages"] > 0:
+        return "inspect_processing"
+    if queue["outcome"] != "timeout" and (queue.get("unacknowledged_messages") or 0) > 0:
+        return "inspect_processing"
     return "report"
 
 
@@ -237,7 +244,7 @@ def _describe_failure(outcome: UnavailableOutcome) -> str:
 
 
 def _correlate_processing(
-    queue: QueueEvidence | UnavailableEvidence,
+    queue: QueueEvidence | UnavailableQueueEvidence,
     processing: ProcessingEvidence | UnavailableEvidence,
 ) -> ProcessingCorrelation:
     if queue["outcome"] != "observed" or processing["outcome"] != "observed":
@@ -252,17 +259,30 @@ def _correlate_processing(
     return "not_in_sample"
 
 
-def _conclude_queue_snapshot(queue: QueueEvidence) -> tuple[DiagnosisStatus, str]:
+def _conclude_queue_snapshot(
+    queue: QueueEvidence | UnavailableQueueEvidence,
+) -> tuple[DiagnosisStatus, str]:
     acknowledgement = ""
-    if "unacknowledged_messages" in queue:
-        unacknowledged = queue["unacknowledged_messages"]
-        if unacknowledged is None:
-            acknowledgement = " The unacknowledged message count is unavailable."
-        else:
-            acknowledgement = (
-                " The count of delivered messages awaiting acknowledgement is "
-                f"{unacknowledged}."
+    unacknowledged = queue.get("unacknowledged_messages")
+    if unacknowledged is not None:
+        acknowledgement = (
+            f" The count of delivered messages awaiting acknowledgement is {unacknowledged}."
+        )
+    elif queue["outcome"] == "observed" and "unacknowledged_messages" in queue:
+        acknowledgement = " The unacknowledged message count is unavailable."
+
+    registered = queue.get("registered_consumers")
+    registration = (
+        f" The broker reports a registered consumer count of {registered}."
+        if registered is not None else ""
+    )
+    if queue["outcome"] != "observed":
+        if queue["outcome"] == "missing" and (unacknowledged is not None or registered is not None):
+            return "undetermined", (
+                f"The pending message count is unavailable.{acknowledgement}{registration}"
             )
+        failure = _describe_failure(queue["outcome"])
+        return "undetermined", f"Queue inspection {failure}. Queue depth is unknown."
 
     pending = queue["pending_messages"]
     if pending <= 0:
@@ -271,13 +291,9 @@ def _conclude_queue_snapshot(queue: QueueEvidence) -> tuple[DiagnosisStatus, str
             f"No pending messages were observed in the queue.{acknowledgement}",
         )
 
-    registered = queue.get("registered_consumers")
-    if registered is None:
-        registration = "The registered consumer count is unavailable."
-    else:
-        registration = f"The broker reports a registered consumer count of {registered}."
+    registration = registration or " The registered consumer count is unavailable."
     return "undetermined", (
-        f"The broker reports a pending message count of {pending}.{acknowledgement} "
+        f"The broker reports a pending message count of {pending}.{acknowledgement}"
         f"{registration} The cause of the backlog is undetermined."
     )
 
@@ -308,13 +324,7 @@ def _processing_summary(
 def _conclude_without_consumer(
     state: DiagnosisState, correlation: ProcessingCorrelation | None
 ) -> tuple[DiagnosisStatus, str]:
-    queue = state["queue"]
-    if queue["outcome"] == "observed":
-        status, conclusion = _conclude_queue_snapshot(queue)
-    else:
-        failure = _describe_failure(queue["outcome"])
-        status = "undetermined"
-        conclusion = f"Queue inspection {failure}. Queue depth is unknown."
+    status, conclusion = _conclude_queue_snapshot(state["queue"])
 
     processing = state.get("processing")
     if processing is not None:

@@ -10,7 +10,7 @@ from math import isfinite
 from typing import Literal
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from opspilot.core.diagnosis import QueueEvidence, UnavailableEvidence
+from opspilot.core.diagnosis import QueueEvidence, UnavailableQueueEvidence
 
 FailureReason = Literal[
     "authentication_failed",
@@ -30,11 +30,9 @@ _HTTP_FAILURES: dict[int, FailureReason] = {
 }
 
 
-class RabbitMQUnavailableEvidence(UnavailableEvidence):
+class RabbitMQUnavailableEvidence(UnavailableQueueEvidence):
     reason: FailureReason
     http_status: int | None
-    registered_consumers: int | None
-    unacknowledged_messages: int | None
 
 
 def _path_segment(name: str) -> str:

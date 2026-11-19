@@ -105,7 +105,7 @@ RabbitMQ 模式保留队列证据及读取耗时。报告分别描述待投递�
 .\.venv\Scripts\python.exe -m opspilot diagnose --management-url http://127.0.0.1:15672 --queue "orders" --processing-record "processing.json" "这个队列有积压吗？"
 ```
 
-队列查询成功且待投递数或待确认数大于零时，OpsPilot 会读取同一队列和虚拟主机下的最新记录。加上 `--message-id` 可独立查询指定消息，包括空队列和队列指标不可用的情况。
+观测到待投递数或已投递待确认数大于零时，OpsPilot 会读取同一队列和虚拟主机下的最新记录。待投递数不可用时，已投递待确认数仍可触发查询，报告会保留已观测的计数并将积压诊断状态记为 `undetermined`。加上 `--message-id` 可独立查询指定消息，包括空队列和队列指标不可用的情况。
 
 ```powershell
 .\.venv\Scripts\python.exe -m opspilot diagnose --management-url http://127.0.0.1:15672 --queue "orders" --processing-record "processing.json" --message-id "order-msg-101" "查这条消息的处理结果"

@@ -222,12 +222,13 @@ def test_inspect_queue_cli(status: int, exit_code: int, outcome: str) -> None:
         (200, 7, 0, 0, "undetermined", "observed"),
         (200, 7, 3, 2, "undetermined", "observed"),
         (200, 7, None, None, "undetermined", "observed"),
+        (200, None, 4, 0, "undetermined", "missing"),
         (403, 0, None, None, "undetermined", "missing"),
     ],
 )
 def test_rabbitmq_diagnosis_saves_queue_evidence(
     http_status: int,
-    pending: int,
+    pending: int | None,
     unacknowledged: int | None,
     registered: int | None,
     diagnosis_status: str,
@@ -275,10 +276,17 @@ def test_rabbitmq_diagnosis_saves_queue_evidence(
                 in report["conclusion"]
             )
     else:
-        assert evidence["reason"] == "access_denied"
+        assert evidence["reason"] == ("metric_missing" if http_status == 200 else "access_denied")
         assert "pending_messages" not in evidence
+        if http_status == 200:
+            assert "pending message count is unavailable" in report["conclusion"]
+            assert (
+                f"delivered messages awaiting acknowledgement is {unacknowledged}"
+                in report["conclusion"]
+            )
+            assert f"registered consumer count of {registered}" in report["conclusion"]
 
-    if pending > 0:
+    if pending is not None and pending > 0:
         if registered is None:
             assert "registered consumer count is unavailable" in report["conclusion"]
         else:
@@ -289,13 +297,15 @@ def test_rabbitmq_diagnosis_saves_queue_evidence(
     ("http_status", "pending", "unacknowledged", "expected_outcomes"),
     [
         (200, 0, 0, ["observed"]),
-        (403, 0, 0, ["missing"]),
+        (403, 0, 3, ["missing"]),
         (200, 3, 0, ["observed", "missing"]),
         (200, 0, 3, ["observed", "observed"]),
+        (200, None, 3, ["missing", "observed"]),
+        (200, None, 0, ["missing"]),
     ],
 )
 def test_rabbitmq_diagnosis_reads_record_only_for_observed_queue_activity(
-    http_status: int, pending: int, unacknowledged: int, expected_outcomes: list[str]
+    http_status: int, pending: int | None, unacknowledged: int, expected_outcomes: list[str]
 ) -> None:
     body = json.dumps(
         {
@@ -336,14 +346,20 @@ def test_rabbitmq_diagnosis_reads_record_only_for_observed_queue_activity(
     report = json.loads(result.stdout)
     assert len(requests) == 1
     assert [call["outcome"] for call in report["tool_calls"]] == expected_outcomes
-    if pending > 0:
+    if http_status != 200:
+        assert report["processing_correlation"] is None
+    elif pending is not None and pending > 0:
         assert report["processing_correlation"] == "unknown"
         assert report["evidence"][1]["reason"] == "record_not_found"
     elif unacknowledged > 0:
-        assert report["status"] == "no_backlog_observed"
+        assert report["status"] == ("undetermined" if pending is None else "no_backlog_observed")
         assert report["processing_correlation"] == "unknown"
         assert report["evidence"][1]["result"] == "succeeded"
         assert "The latest processing attempt succeeded." in report["conclusion"]
+        if pending is None:
+            assert "pending message count is unavailable" in report["conclusion"]
+            assert f"delivered messages awaiting acknowledgement is {unacknowledged}" in report["conclusion"]
+            assert "registered consumer count of 0" in report["conclusion"]
     else:
         assert report["processing_correlation"] is None
 
