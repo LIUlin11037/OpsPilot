@@ -315,7 +315,7 @@ def run_queue_diagnosis(
     message_id: str | None = None,
 ) -> DiagnosisReport:
     if message_id is not None and (not message_id.strip() or processing_tool is None):
-        raise ValueError("A nonempty message ID requires a configured processing record.")
+        raise ValueError("A nonempty message ID requires a configured processing source.")
 
     graph = _queue_graph(tool)
     state: DiagnosisState = {"question": question}

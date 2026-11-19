@@ -97,6 +97,16 @@ RabbitMQ 模式保留队列证据及读取耗时。报告分别描述待投递�
 
 RabbitMQ 队列指标的消息 ID 样本为空，因此报告的队列消息关联仍标为 `unknown`。
 
+### 连接 HTTP 目标服务
+
+用 `--processing-url` 替换 `--processing-record`，即可从目标服务读取同样格式的业务记录。`--timeout` 同时应用于 RabbitMQ 和目标服务的 socket 操作。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot diagnose --management-url http://127.0.0.1:15672 --queue "orders" --processing-url http://127.0.0.1:8080/processing --message-id "order-msg-101" "查这条消息的处理结果"
+```
+
+OpsPilot 向指定端点发送只读 GET，请求参数为 `queue`、`vhost`，以及用户指定时的 `message_id`。端点使用 HTTP 200 返回上述单条 JSON 记录或记录数组，查不到记录时返回 404 或空数组。OpsPilot 还会校验响应中的队列、虚拟主机和消息 ID。HTTP 错误、超时和无效响应会作为不可用证据写入报告。当前适配器直接访问无需凭据的测试端点。
+
 ## RabbitMQ 验收测试
 
 默认 pytest 在离线环境运行。真实验收需要一个独立的 RabbitMQ 测试实例，开启 Management 插件及队列统计。可以在单独的 PowerShell 窗口启动下面的临时容器，启动完成后再运行测试。运行结束后用 Ctrl+C 停止容器。 [RabbitMQ 容器文档](https://www.rabbitmq.com/docs/download)
@@ -116,4 +126,4 @@ $env:OPSPILOT_RABBITMQ_PASSWORD = "opspilot_local_only"
 .\.venv\Scripts\python.exe -m pytest tests/test_rabbitmq_live.py --rabbitmq-live -q
 ```
 
-测试覆盖空队列、有待投递且无订阅、部分及全部消息已投递待确认、业务记录读取，以及按任务 ID 回看报告。每次测试使用 broker 生成的独占队列和临时 SQLite，结束时随连接和临时目录一起清理。
+测试覆盖空队列、有待投递且无订阅、部分及全部消息已投递待确认、通过本地 HTTP 目标服务读取业务记录，以及按任务 ID 回看报告。每次测试使用 broker 生成的独占队列和临时 SQLite，结束时随连接和临时目录一起清理。

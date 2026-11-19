@@ -6,11 +6,12 @@ import os
 import sqlite3
 from pathlib import Path
 
+from opspilot.adapters.http_processing import HttpProcessingAdapter
 from opspilot.adapters.json_processing import JsonProcessingAdapter
 from opspilot.adapters.simulated import SimulatedProcessingAdapter
 from opspilot.connectors.rabbitmq import RabbitMQQueueConnector
 from opspilot.connectors.simulated import SimulatedQueueConnector
-from opspilot.core.diagnosis import run_diagnosis, run_queue_diagnosis
+from opspilot.core.diagnosis import TargetProcessingTool, run_diagnosis, run_queue_diagnosis
 from opspilot.core.startup import run_startup
 from opspilot.task_store import load_report, save_report
 
@@ -44,6 +45,23 @@ def _rabbitmq_connector(
         vhost="/" if args.vhost is None else args.vhost,
         timeout_seconds=5.0 if args.timeout is None else args.timeout,
     )
+
+
+def _target_processing_tool(
+    args: argparse.Namespace, connector: RabbitMQQueueConnector
+) -> TargetProcessingTool | None:
+    if args.processing_record is not None:
+        return JsonProcessingAdapter(
+            args.processing_record, queue=connector.queue, vhost=connector.vhost
+        )
+    if args.processing_url is not None:
+        return HttpProcessingAdapter(
+            args.processing_url,
+            queue=connector.queue,
+            vhost=connector.vhost,
+            timeout_seconds=connector.timeout_seconds,
+        )
+    return None
 
 
 def main() -> None:
@@ -93,10 +111,14 @@ def main() -> None:
     source.add_argument("--scenario", choices=scenarios)
     source.add_argument("--management-url", help="RabbitMQ Management API base URL.")
     _add_queue_options(diagnose)
-    diagnose.add_argument(
+    processing_source = diagnose.add_mutually_exclusive_group()
+    processing_source.add_argument(
         "--processing-record", type=Path, help="Read a target's JSON processing record."
     )
-    diagnose.add_argument("--message-id", help="Look up an exact ID in the processing record.")
+    processing_source.add_argument(
+        "--processing-url", help="Read processing records from an HTTP target endpoint."
+    )
+    diagnose.add_argument("--message-id", help="Look up processing records for an exact ID.")
     diagnose.add_argument("question", help="Incident description.")
     report_command = commands.add_parser("report", help="Show a saved report.")
     report_command.add_argument("task_id", help="Task ID returned by diagnose.")
@@ -132,24 +154,23 @@ def main() -> None:
             question = args.question.strip()
             if not question:
                 diagnose.error("question must not be empty")
-            if args.message_id is not None and args.processing_record is None:
-                diagnose.error("--message-id requires --processing-record")
+            has_processing_source = (
+                args.processing_record is not None or args.processing_url is not None
+            )
+            if args.message_id is not None and not has_processing_source:
+                diagnose.error("--message-id requires --processing-record or --processing-url")
             if args.management_url is not None:
                 queue_tool = _rabbitmq_connector(args, diagnose)
-                processing_tool = None
-                if args.processing_record is not None:
-                    processing_tool = JsonProcessingAdapter(
-                        args.processing_record, queue=queue_tool.queue, vhost=queue_tool.vhost
-                    )
                 try:
+                    processing_tool = _target_processing_tool(args, queue_tool)
                     report = run_queue_diagnosis(
                         question, queue_tool, processing_tool, message_id=args.message_id
                     )
                 except ValueError as error:
                     diagnose.error(str(error))
             else:
-                if args.processing_record is not None:
-                    diagnose.error("--processing-record requires --management-url")
+                if has_processing_source:
+                    diagnose.error("--processing-record and --processing-url require --management-url")
                 if any(value is not None for value in (args.queue, args.vhost, args.timeout)):
                     diagnose.error("--queue, --vhost, and --timeout require --management-url")
                 simulated_queue, adapter = scenarios[args.scenario]

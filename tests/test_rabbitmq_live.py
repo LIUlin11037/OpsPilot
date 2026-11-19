@@ -5,9 +5,9 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import monotonic, sleep
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -83,7 +83,10 @@ def _wait_for_snapshot(
     ids=["ready-and-unacknowledged", "unacknowledged-only"],
 )
 def test_live_queue_lifecycle(
-    rabbitmq_settings: RabbitMQTestSettings, prefetch: int, diagnosis_status: str
+    rabbitmq_settings: RabbitMQTestSettings,
+    prefetch: int,
+    diagnosis_status: str,
+    processing_service,
 ) -> None:
     try:
         import pika
@@ -145,7 +148,6 @@ def test_live_queue_lifecycle(
             )
             delivered_snapshot = (MESSAGE_COUNT - prefetch, prefetch, 1)
             _wait_for_snapshot(connector, delivered_snapshot)
-            record = Path(directory) / "processing.json"
             requested_record = {
                 "queue": name,
                 "vhost": parameters.virtual_host,
@@ -159,20 +161,35 @@ def test_live_queue_lifecycle(
                 "result": "succeeded",
                 "attempted_at": "2026-11-19T03:01:00Z",
             }
-            record.write_text(
-                json.dumps([requested_record, unrelated_record]),
-                encoding="utf-8",
-            )
-            delivered = _run_cli(
-                directory,
-                "diagnose",
-                *queue_options,
-                "--processing-record",
-                str(record),
-                "--message-id",
-                "acceptance-msg-1",
-                "Check deliveries awaiting acknowledgement",
-            )
+            records = [requested_record, unrelated_record]
+
+            def read_records(path: str) -> tuple[int, bytes]:
+                url = urlsplit(path)
+                if url.path != "/processing":
+                    return 404, b"[]"
+                query = parse_qs(url.query)
+                matches = [
+                    record
+                    for record in records
+                    if all(
+                        query.get(field) == [record[field]]
+                        for field in ("queue", "vhost", "message_id")
+                    )
+                ]
+                return (200, json.dumps(matches).encode()) if matches else (404, b"[]")
+
+            with processing_service(read_records) as (endpoint, requests):
+                delivered = _run_cli(
+                    directory,
+                    "diagnose",
+                    *queue_options,
+                    "--processing-url",
+                    endpoint,
+                    "--message-id",
+                    "acceptance-msg-1",
+                    "Check deliveries awaiting acknowledgement",
+                )
+            (request,) = requests
             assert delivered["status"] == diagnosis_status
             assert delivered["requested_message_id"] == "acceptance-msg-1"
             evidence, processing = delivered["evidence"]
@@ -181,7 +198,7 @@ def test_live_queue_lifecycle(
             assert delivered["processing_correlation"] == "unknown"
             assert processing["message_id"] == "acceptance-msg-1"
             assert processing["result"] == "failed"
-            assert processing["source"] == record.as_uri()
+            assert processing["source"] == endpoint.removesuffix("/processing") + request
             assert [call["tool"] for call in delivered["tool_calls"]] == [
                 "inspect_queue",
                 "inspect_processing",
