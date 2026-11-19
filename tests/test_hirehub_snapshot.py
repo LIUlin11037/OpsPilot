@@ -29,6 +29,29 @@ def test_snapshot_ignores_invalid_durations_but_keeps_zero() -> None:
     } == {"queue": 0}
 
 
+@pytest.mark.parametrize("correct_queue", [True, False])
+def test_snapshot_only_keeps_valid_partial_counts_for_the_expected_queue(correct_queue: bool) -> None:
+    data = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    data["queue"].update(
+        outcome="missing", reason="invalid_response", http_status=200,
+        pending_messages=2, registered_consumers=0, unacknowledged_messages=True,
+    )
+    if not correct_queue:
+        data["queue"]["name"] = "another.queue"
+
+    trace = HireHubSnapshotAdapter.inspect_data(data, 1001)
+    queue = trace["checks"][-1]
+
+    assert queue["checkpoint"] == "queue"
+    assert queue["outcome"] == "missing"
+    assert "pending_messages" not in queue
+    assert "unacknowledged_messages" not in queue
+    if correct_queue:
+        assert queue["registered_consumers"] == 0
+    else:
+        assert "registered_consumers" not in queue
+
+
 def test_hirehub_cli_saves_a_branch_with_no_processing_rows() -> None:
     with TemporaryDirectory(prefix="opspilot-hirehub-test-") as directory:
         result = subprocess.run(

@@ -5,7 +5,6 @@ from typing import TypedDict
 from opspilot.core.diagnosis import Evidence, TargetTraceSummary
 from opspilot.task_store import StoredReport
 
-_QUEUE_FIELDS = ("outcome", "pending_messages", "unacknowledged_messages", "registered_consumers")
 ComparisonValue = str | int | None
 
 
@@ -46,12 +45,20 @@ def _values(trace: TargetTraceSummary, evidence: list[Evidence]) -> dict[str, Co
         f"branches.{branch}": status for branch, status in trace["branches"].items()
     }
     queue = next((check for check in evidence if check.get("checkpoint") == "queue"), None)
-    for field in _QUEUE_FIELDS:
-        values[f"queue.{field}"] = (
-            queue.get(field)
-            if queue is not None and (field == "outcome" or queue["outcome"] == "observed")
-            else None
-        )
+    if queue is None:
+        return values
+    outcome = queue["outcome"]
+    values["queue.outcome"] = outcome
+    if outcome == "observed":
+        values["queue.pending_messages"] = queue.get("pending_messages")
+    partial_response = (
+        outcome == "missing"
+        and queue.get("http_status") == 200
+        and queue.get("reason") in ("metric_missing", "invalid_response")
+    )
+    if outcome == "observed" or partial_response:
+        values["queue.unacknowledged_messages"] = queue.get("unacknowledged_messages")
+        values["queue.registered_consumers"] = queue.get("registered_consumers")
     return values
 
 

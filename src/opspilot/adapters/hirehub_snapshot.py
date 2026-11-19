@@ -148,24 +148,30 @@ class _Snapshot:
 
     def queue(self) -> TraceEvidence:
         evidence, section = self.section("queue")
-        if evidence["outcome"] != "observed":
-            return evidence
+        observed = evidence["outcome"] == "observed"
         if section.get("name") != NOTIFICATION_QUEUE:
-            _mark_missing(evidence, "queue_mismatch")
+            if observed:
+                _mark_missing(evidence, "queue_mismatch")
+            return evidence
+        partial_response = (
+            evidence["outcome"] == "missing"
+            and evidence.get("http_status") == 200
+            and evidence.get("reason") in ("metric_missing", "invalid_response")
+        )
+        if not observed and not partial_response:
             return evidence
 
-        evidence["pending_messages"] = _nonnegative_count(section.get("pending_messages"))
-        evidence["unacknowledged_messages"] = _nonnegative_count(
-            section.get("unacknowledged_messages")
-        )
-        evidence["registered_consumers"] = _nonnegative_count(
-            section.get("registered_consumers")
-        )
-        if all(
-            evidence.get(key) is None
-            for key in ("pending_messages", "unacknowledged_messages", "registered_consumers")
-        ):
-            _mark_missing(evidence, "metrics_missing")
+        unacknowledged = _nonnegative_count(section.get("unacknowledged_messages"))
+        registered = _nonnegative_count(section.get("registered_consumers"))
+        if observed or unacknowledged is not None:
+            evidence["unacknowledged_messages"] = unacknowledged
+        if observed or registered is not None:
+            evidence["registered_consumers"] = registered
+        if observed:
+            pending = _nonnegative_count(section.get("pending_messages"))
+            evidence["pending_messages"] = pending
+            if pending is None and unacknowledged is None and registered is None:
+                _mark_missing(evidence, "metrics_missing")
         return evidence
 
 

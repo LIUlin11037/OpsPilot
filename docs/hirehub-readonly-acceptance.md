@@ -68,6 +68,8 @@ New-Item -ItemType Directory -Force .opspilot | Out-Null
 
 采集失败时，快照和诊断报告会记录 `reason`，例如 `access_denied`、`authentication_failed`、`transport_error` 或 `request_timeout`。有可用的错误码时，也会记录 `mysql_error_code` 或 `http_status`。快照仅保留受支持的原因和数字错误码。早期快照缺少这些字段时，报告沿用 `source_unavailable` 或 `source_timeout`。
 
+RabbitMQ Management 返回 HTTP `200` 但待投递数缺失或无效时，队列检查仍记为 `missing`。报告、Markdown 和复查对比会保留响应中有效的待确认数和消费者数，包括实际观测到的 `0`。
+
 ## 直接诊断隔离环境
 
 使用相同的依赖和只读凭据，`diagnose-hirehub` 可在一次运行中采集并保存报告。

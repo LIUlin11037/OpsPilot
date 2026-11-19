@@ -81,6 +81,23 @@ def test_compare_keeps_unavailable_queue_distinct_from_observed_zero(saved_pair)
     assert compare_trace_reports(after, after)["changes"] == []
 
 
+def test_compare_preserves_valid_counts_from_a_partial_queue_response(saved_pair) -> None:
+    _, _, before = saved_pair
+    partial = deepcopy(before)
+    queue = next(check for check in partial["evidence"] if check.get("checkpoint") == "queue")
+    queue.update(
+        outcome="missing", reason="metric_missing", http_status=200,
+        unacknowledged_messages=4, registered_consumers=0,
+    )
+
+    assert compare_trace_reports(before, partial)["changes"] == [
+        {"field": "queue.outcome", "before": "observed", "after": "missing"},
+        {"field": "queue.pending_messages", "before": 0, "after": None},
+        {"field": "queue.registered_consumers", "before": 1, "after": 0},
+        {"field": "queue.unacknowledged_messages", "before": 0, "after": 4},
+    ]
+
+
 @pytest.mark.parametrize(
     ("field", "value"), [
         ("environment", "other-environment"), ("vhost", "/other"),

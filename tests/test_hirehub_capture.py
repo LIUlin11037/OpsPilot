@@ -139,10 +139,10 @@ def test_hirehub_cli_live_reads_produce_diagnosable_evidence(
         assert checks["queue"]["source"] == f"{path.as_uri()}#queue"
 
 
-@pytest.mark.parametrize("queue_denied", [False, True])
+@pytest.mark.parametrize("queue_state", ["observed", "access_denied", "metric_missing"])
 @pytest.mark.parametrize("replay", [False, True])
 def test_diagnosis_preserves_queue_when_delivery_lookup_times_out(
-    monkeypatch, capsys, queue_denied, replay
+    monkeypatch, capsys, queue_state, replay
 ) -> None:
     def select(self, query, parameters):
         assert "hirehub_delivery.delivery" in query and parameters == (1001,)
@@ -150,8 +150,13 @@ def test_diagnosis_preserves_queue_when_delivery_lookup_times_out(
 
     monkeypatch.setattr(MySQLConnector, "select", select)
     queue_result = {"source": QUEUE_SOURCE, "observed_at": OBSERVED_AT}
-    if queue_denied:
+    if queue_state == "access_denied":
         queue_result.update(outcome="missing", reason="access_denied", http_status=403)
+    elif queue_state == "metric_missing":
+        queue_result.update(
+            outcome="missing", reason="metric_missing", http_status=200,
+            unacknowledged_messages=4, registered_consumers=0,
+        )
     else:
         queue_result.update(outcome="observed", pending_messages=2)
     monkeypatch.setattr(RabbitMQQueueConnector, "inspect_queue", lambda self: queue_result)
@@ -187,9 +192,15 @@ def test_diagnosis_preserves_queue_when_delivery_lookup_times_out(
     if captured is not None:
         assert report["evidence"][1]["duration_ms"] == captured["queue"]["duration_ms"]
         assert report["evidence"][1]["source"] == f"{snapshot.as_uri()}#queue"
-    if queue_denied:
+    if queue_state == "access_denied":
         assert report["evidence"][1]["reason"] == "access_denied"
         assert report["evidence"][1]["http_status"] == 403
+    elif queue_state == "metric_missing":
+        assert report["evidence"][1]["outcome"] == "missing"
+        assert report["evidence"][1]["reason"] == "metric_missing"
+        assert "pending_messages" not in report["evidence"][1]
+        assert report["evidence"][1]["unacknowledged_messages"] == 4
+        assert report["evidence"][1]["registered_consumers"] == 0
     else:
         assert report["evidence"][1]["pending_messages"] == 2
 
