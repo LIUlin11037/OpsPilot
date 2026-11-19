@@ -146,16 +146,21 @@ def test_live_queue_lifecycle(
             delivered_snapshot = (MESSAGE_COUNT - prefetch, prefetch, 1)
             _wait_for_snapshot(connector, delivered_snapshot)
             record = Path(directory) / "processing.json"
+            requested_record = {
+                "queue": name,
+                "vhost": parameters.virtual_host,
+                "message_id": "acceptance-msg-1",
+                "result": "failed",
+                "attempted_at": "2026-11-19T03:00:00Z",
+            }
+            unrelated_record = {
+                **requested_record,
+                "message_id": "acceptance-msg-2",
+                "result": "succeeded",
+                "attempted_at": "2026-11-19T03:01:00Z",
+            }
             record.write_text(
-                json.dumps(
-                    {
-                        "queue": name,
-                        "vhost": parameters.virtual_host,
-                        "message_id": "acceptance-msg-1",
-                        "result": "failed",
-                        "attempted_at": "2026-11-19T03:00:00Z",
-                    }
-                ),
+                json.dumps([requested_record, unrelated_record]),
                 encoding="utf-8",
             )
             delivered = _run_cli(
@@ -164,9 +169,12 @@ def test_live_queue_lifecycle(
                 *queue_options,
                 "--processing-record",
                 str(record),
+                "--message-id",
+                "acceptance-msg-1",
                 "Check deliveries awaiting acknowledgement",
             )
             assert delivered["status"] == diagnosis_status
+            assert delivered["requested_message_id"] == "acceptance-msg-1"
             evidence, processing = delivered["evidence"]
             assert _snapshot(evidence) == delivered_snapshot
             assert f"awaiting acknowledgement is {prefetch}" in delivered["conclusion"]

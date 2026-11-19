@@ -71,6 +71,12 @@ class ProcessingTool(Protocol):
     def inspect_processing(self) -> ProcessingEvidence | UnavailableEvidence: ...
 
 
+class TargetProcessingTool(ProcessingTool, Protocol):
+    def inspect_processing(
+        self, *, message_id: str | None = None
+    ) -> ProcessingEvidence | UnavailableEvidence: ...
+
+
 class DiagnosisReportFields(TypedDict):
     question: str
     status: DiagnosisStatus
@@ -81,6 +87,7 @@ class DiagnosisReportFields(TypedDict):
 
 class DiagnosisReport(DiagnosisReportFields, total=False):
     tool_calls: list[ToolCall]
+    requested_message_id: str
 
 
 class DiagnosisInput(TypedDict):
@@ -88,6 +95,7 @@ class DiagnosisInput(TypedDict):
 
 
 class DiagnosisState(DiagnosisInput, total=False):
+    requested_message_id: str
     queue: QueueEvidence | UnavailableEvidence
     consumer: ConsumerEvidence | UnavailableEvidence
     processing: ProcessingEvidence | UnavailableEvidence
@@ -173,12 +181,19 @@ def _conclude_queue_snapshot(queue: QueueEvidence) -> tuple[DiagnosisStatus, str
 def _processing_summary(
     processing: ProcessingEvidence | UnavailableEvidence,
     correlation: ProcessingCorrelation | None,
+    *,
+    targeted: bool = False,
 ) -> str:
     if processing["outcome"] != "observed":
         failure = _describe_failure(processing["outcome"])
+        if targeted:
+            return f"Processing lookup for the requested message {failure}."
         return f"Processing inspection {failure}."
 
-    detail = f"The latest processing attempt {processing['result']}."
+    subject = "The latest processing attempt"
+    if targeted:
+        subject = f"{subject} for the requested message"
+    detail = f"{subject} {processing['result']}."
     if correlation == "matched":
         return f"{detail} Its message ID matches a sampled pending message."
     if correlation == "not_in_sample":
@@ -186,21 +201,32 @@ def _processing_summary(
     return f"{detail} Message correlation is unknown."
 
 
-def _conclude(
+def _conclude_without_consumer(
     state: DiagnosisState, correlation: ProcessingCorrelation | None
 ) -> tuple[DiagnosisStatus, str]:
     queue = state["queue"]
-    if queue["outcome"] != "observed":
+    if queue["outcome"] == "observed":
+        status, conclusion = _conclude_queue_snapshot(queue)
+    else:
         failure = _describe_failure(queue["outcome"])
-        return "undetermined", f"Queue inspection {failure}. Queue depth is unknown."
+        status = "undetermined"
+        conclusion = f"Queue inspection {failure}. Queue depth is unknown."
 
+    processing = state.get("processing")
+    if processing is not None:
+        detail = _processing_summary(
+            processing, correlation, targeted="requested_message_id" in state
+        )
+        conclusion = f"{conclusion} {detail}"
+    return status, conclusion
+
+
+def _conclude(
+    state: DiagnosisState, correlation: ProcessingCorrelation | None
+) -> tuple[DiagnosisStatus, str]:
     consumer = state.get("consumer")
     if consumer is None:
-        status, conclusion = _conclude_queue_snapshot(queue)
-        processing = state.get("processing")
-        if processing is not None:
-            conclusion = f"{conclusion} {_processing_summary(processing, correlation)}"
-        return status, conclusion
+        return _conclude_without_consumer(state, correlation)
 
     if consumer["outcome"] != "observed":
         failure = _describe_failure(consumer["outcome"])
@@ -237,6 +263,8 @@ def _write_report(state: DiagnosisState) -> dict[str, DiagnosisReport]:
         "evidence": [queue],
         "tool_calls": state["tool_calls"],
     }
+    if "requested_message_id" in state:
+        report["requested_message_id"] = state["requested_message_id"]
     consumer = state.get("consumer")
     if consumer is not None:
         report["evidence"].append(consumer)
@@ -270,23 +298,39 @@ def _queue_graph(tool: QueueTool) -> StateGraph:
     return graph
 
 
-def _add_processing_node(graph: StateGraph, tool: ProcessingTool) -> None:
+def _add_processing_node(
+    graph: StateGraph, inspect: Callable[[], ProcessingEvidence | UnavailableEvidence]
+) -> None:
     graph.add_node(
-        "inspect_processing", partial(_inspect, "processing", tool.inspect_processing)
+        "inspect_processing", partial(_inspect, "processing", inspect)
     )
     graph.add_edge("inspect_processing", "report")
 
 
 def run_queue_diagnosis(
-    question: str, tool: QueueTool, processing_tool: ProcessingTool | None = None
+    question: str,
+    tool: QueueTool,
+    processing_tool: TargetProcessingTool | None = None,
+    *,
+    message_id: str | None = None,
 ) -> DiagnosisReport:
+    if message_id is not None and (not message_id.strip() or processing_tool is None):
+        raise ValueError("A nonempty message ID requires a configured processing record.")
+
     graph = _queue_graph(tool)
+    state: DiagnosisState = {"question": question}
     if processing_tool is None:
         graph.add_edge("inspect_queue", "report")
-    else:
-        _add_processing_node(graph, processing_tool)
+    elif message_id is None:
+        _add_processing_node(graph, processing_tool.inspect_processing)
         graph.add_conditional_edges("inspect_queue", _after_queue_with_processing)
-    return graph.compile().invoke({"question": question})["report"]
+    else:
+        state["requested_message_id"] = message_id
+        _add_processing_node(
+            graph, partial(processing_tool.inspect_processing, message_id=message_id)
+        )
+        graph.add_edge("inspect_queue", "inspect_processing")
+    return graph.compile().invoke(state)["report"]
 
 
 def run_diagnosis(
@@ -296,7 +340,7 @@ def run_diagnosis(
     graph.add_node(
         "inspect_consumer", partial(_inspect, "consumer", tools.inspect_consumer)
     )
-    _add_processing_node(graph, processing_tool)
+    _add_processing_node(graph, processing_tool.inspect_processing)
     graph.add_conditional_edges("inspect_queue", _after_queue)
     graph.add_conditional_edges("inspect_consumer", _after_consumer)
     return graph.compile().invoke({"question": question})["report"]

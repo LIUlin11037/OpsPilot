@@ -346,3 +346,63 @@ def test_rabbitmq_diagnosis_reads_record_only_for_observed_queue_activity(
         assert "The latest processing attempt succeeded." in report["conclusion"]
     else:
         assert report["processing_correlation"] is None
+
+
+@pytest.mark.parametrize(
+    ("http_status", "message_id", "status"),
+    [
+        (200, "msg-101", "no_backlog_observed"),
+        (403, "msg-101", "undetermined"),
+        (200, "msg-999", "no_backlog_observed"),
+    ],
+)
+def test_requested_message_is_checked_independently_of_queue_activity(
+    http_status: int, message_id: str, status: str
+) -> None:
+    record = {
+        "queue": "orders",
+        "vhost": "/",
+        "message_id": "msg-101",
+        "result": "succeeded",
+        "attempted_at": "2026-11-19T03:00:00Z",
+    }
+    other = {**record, "message_id": "msg-102", "attempted_at": "2026-11-19T03:01:00Z"}
+    with TemporaryDirectory(prefix="opspilot-rabbitmq-test-") as directory:
+        path = Path(directory) / "processing.json"
+        path.write_text(json.dumps([record, other]), encoding="utf-8")
+        body = b'{"messages_ready": 0, "messages_unacknowledged": 0}'
+        with _management_api(body, status=http_status) as (url, _requests):
+            result = _cli(
+                "diagnose",
+                "--management-url",
+                url,
+                "--queue",
+                "orders",
+                "--processing-record",
+                str(path),
+                "--message-id",
+                message_id,
+                "Check this delivery",
+                cwd=directory,
+            )
+        assert result.returncode == 0, result.stderr
+        report = json.loads(result.stdout)
+        stored = _cli("report", report["task_id"], cwd=directory)
+
+    assert stored.returncode == 0, stored.stderr
+    assert json.loads(stored.stdout) == report
+    assert report["requested_message_id"] == message_id
+    assert report["status"] == status
+    assert report["processing_correlation"] == "unknown"
+    assert [call["tool"] for call in report["tool_calls"]] == [
+        "inspect_queue",
+        "inspect_processing",
+    ]
+    processing = report["evidence"][1]
+    if message_id == "msg-101":
+        assert processing["message_id"] == message_id
+        assert "for the requested message succeeded." in report["conclusion"]
+    else:
+        assert processing["outcome"] == "missing"
+        assert processing["reason"] == "message_not_found"
+        assert "lookup for the requested message returned no data." in report["conclusion"]

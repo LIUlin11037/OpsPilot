@@ -71,7 +71,7 @@ RabbitMQ 模式保留队列证据及读取耗时。报告分别描述待投递�
 
 ### 结合业务处理记录
 
-目标系统可以将最近一次处理尝试导出为 UTF-8 JSON。将下例保存为 `processing.json`，并用实际的队列、消息 ID、结果和时间替换示例值。`result` 支持 `succeeded` 和 `failed`，`attempted_at` 使用带时区的 ISO 8601 时间。
+目标系统可以用 UTF-8 JSON 导出单条处理记录，也可以将多条相同结构的记录放在一个 JSON 数组中。将下例保存为 `processing.json`，并用实际的队列、消息 ID、结果和时间替换示例值。`result` 支持 `succeeded` 和 `failed`，`attempted_at` 使用带时区的 ISO 8601 时间。
 
 ```json
 {
@@ -87,7 +87,15 @@ RabbitMQ 模式保留队列证据及读取耗时。报告分别描述待投递�
 .\.venv\Scripts\python.exe -m opspilot diagnose --management-url http://127.0.0.1:15672 --queue "orders" --processing-record "processing.json" "这个队列有积压吗？"
 ```
 
-队列查询成功且待投递数或待确认数大于零时，OpsPilot 会尝试读取记录。队列和虚拟主机匹配的记录会保留在报告中；文件缺失、内容无效或目标不匹配时，报告会保留不可用原因。RabbitMQ 队列指标的消息 ID 样本为空，消息关联标为 `unknown`，待投递积压的根因仍标为 `undetermined`。
+队列查询成功且待投递数或待确认数大于零时，OpsPilot 会读取同一队列和虚拟主机下的最新记录。加上 `--message-id` 可独立查询指定消息，包括空队列和队列指标不可用的情况。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot diagnose --management-url http://127.0.0.1:15672 --queue "orders" --processing-record "processing.json" --message-id "order-msg-101" "查这条消息的处理结果"
+```
+
+指定 ID 时，报告会保存 `requested_message_id`。查询在对应队列和虚拟主机内精确匹配 ID，选取 `attempted_at` 最新的一次尝试。同一时间的多条记录取文件位置靠后的记录。目标范围内查无该 ID 时，证据标为 `message_not_found`。文件缺失、内容无效或目标不匹配也有对应的不可用原因。
+
+RabbitMQ 队列指标的消息 ID 样本为空，因此报告的队列消息关联仍标为 `unknown`。
 
 ## RabbitMQ 验收测试
 

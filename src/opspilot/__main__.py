@@ -96,6 +96,7 @@ def main() -> None:
     diagnose.add_argument(
         "--processing-record", type=Path, help="Read a target's JSON processing record."
     )
+    diagnose.add_argument("--message-id", help="Look up an exact ID in the processing record.")
     diagnose.add_argument("question", help="Incident description.")
     report_command = commands.add_parser("report", help="Show a saved report.")
     report_command.add_argument("task_id", help="Task ID returned by diagnose.")
@@ -131,6 +132,8 @@ def main() -> None:
             question = args.question.strip()
             if not question:
                 diagnose.error("question must not be empty")
+            if args.message_id is not None and args.processing_record is None:
+                diagnose.error("--message-id requires --processing-record")
             if args.management_url is not None:
                 queue_tool = _rabbitmq_connector(args, diagnose)
                 processing_tool = None
@@ -139,7 +142,9 @@ def main() -> None:
                         args.processing_record, queue=queue_tool.queue, vhost=queue_tool.vhost
                     )
                 try:
-                    report = run_queue_diagnosis(question, queue_tool, processing_tool)
+                    report = run_queue_diagnosis(
+                        question, queue_tool, processing_tool, message_id=args.message_id
+                    )
                 except ValueError as error:
                     diagnose.error(str(error))
             else:

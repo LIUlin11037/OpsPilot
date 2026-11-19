@@ -51,3 +51,49 @@ def test_unusable_processing_record_is_evidence(
     assert evidence["outcome"] == "missing"
     assert evidence["reason"] == reason
     assert "result" not in evidence
+
+
+@pytest.mark.parametrize(
+    ("requested", "expected_id", "expected_result"),
+    [
+        (None, "msg-102", "failed"),
+        ("msg-101", "msg-101", "succeeded"),
+        ("msg-1", None, None),
+    ],
+)
+def test_selects_latest_attempt_within_queue_and_exact_message_id(
+    requested: str | None, expected_id: str | None, expected_result: str | None
+) -> None:
+    records = [
+        {**RECORD, "result": "succeeded", "attempted_at": "2026-11-19T03:02:00Z"},
+        {**RECORD, "message_id": "msg-102", "attempted_at": "2026-11-19T03:03:00Z"},
+        {**RECORD, "vhost": "other", "attempted_at": "2026-11-19T03:04:00Z"},
+        {**RECORD, "attempted_at": "2026-11-19T11:01:00+08:00"},
+    ]
+    with TemporaryDirectory(prefix="opspilot-record-test-") as directory:
+        path = Path(directory) / "processing.json"
+        path.write_text(json.dumps(records), encoding="utf-8")
+        evidence = JsonProcessingAdapter(path, "orders", "/").inspect_processing(
+            message_id=requested
+        )
+
+    if expected_id is None:
+        assert evidence["outcome"] == "missing"
+        assert evidence["reason"] == "message_not_found"
+    else:
+        assert evidence["outcome"] == "observed"
+        assert evidence["message_id"] == expected_id
+        assert evidence["result"] == expected_result
+
+
+def test_later_file_entry_wins_when_attempt_times_are_equal() -> None:
+    records = [RECORD, {**RECORD, "result": "succeeded"}]
+    with TemporaryDirectory(prefix="opspilot-record-test-") as directory:
+        path = Path(directory) / "processing.json"
+        path.write_text(json.dumps(records), encoding="utf-8")
+        evidence = JsonProcessingAdapter(path, "orders", "/").inspect_processing(
+            message_id="msg-101"
+        )
+
+    assert evidence["outcome"] == "observed"
+    assert evidence["result"] == "succeeded"
