@@ -49,6 +49,12 @@ JSON 报告包含任务 ID、用户提交的问题、诊断状态和结论。每
 .\.venv\Scripts\python.exe -m opspilot report "TASK_ID"
 ```
 
+加上 `--format markdown` 可以查看适合阅读和复制的报告，包含结论、观察时间、证据来源和已有的工具调用记录。队列诊断与 HireHub 诊断共用此入口，默认输出为 JSON。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot report "TASK_ID" --format markdown
+```
+
 如需指定数据库路径，在子命令前加 `--db PATH`。诊断和查询时使用同一路径。
 
 ## 只读查询 RabbitMQ 队列

@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sqlite3
+import sys
 from pathlib import Path
 
 from opspilot.adapters.hirehub_capture import HireHubLiveAdapter
@@ -17,6 +18,7 @@ from opspilot.connectors.simulated import SimulatedQueueConnector
 from opspilot.core.diagnosis import TargetProcessingTool, run_diagnosis, run_queue_diagnosis
 from opspilot.core.startup import run_startup
 from opspilot.core.target_trace import run_target_trace
+from opspilot.report_markdown import render_markdown
 from opspilot.task_store import load_report, save_report
 
 
@@ -182,6 +184,7 @@ def main() -> None:
     _add_hirehub_live_options(capture, required=True)
     report_command = commands.add_parser("report", help="Show a saved report.")
     report_command.add_argument("task_id", help="Task ID returned by diagnose.")
+    report_command.add_argument("--format", choices=("json", "markdown"), default="json")
     inspect_queue = commands.add_parser(
         "inspect-queue", help="Read queue metrics from RabbitMQ Management."
     )
@@ -268,6 +271,9 @@ def main() -> None:
     except (OSError, sqlite3.Error, json.JSONDecodeError) as error:
         parser.exit(1, f"opspilot: report storage error: {error}\n")
 
+    if args.command == "report" and args.format == "markdown":
+        sys.stdout.buffer.write(render_markdown(stored_report).encode("utf-8", "backslashreplace"))
+        return
     print(json.dumps(stored_report, indent=2))
 
 
