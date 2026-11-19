@@ -1,4 +1,4 @@
-"""Read projected HireHub evidence from a local snapshot."""
+"""Validate and correlate projected HireHub observations."""
 
 import json
 from dataclasses import dataclass
@@ -47,19 +47,26 @@ def _mark_missing(evidence: TraceEvidence, reason: str) -> None:
 @dataclass(frozen=True)
 class _Snapshot:
     data: dict[str, Any]
-    source: str
+    file_source: str | None
     captured_at: str
 
     def section(self, name: str) -> tuple[TraceEvidence, dict[str, Any]]:
+        section = self.data.get(name)
+        origin = _ORIGINS[name]
+        if self.file_source is not None:
+            source = f"{self.file_source}#{name}"
+        elif name == "queue":
+            source = section.get("source", origin) if isinstance(section, dict) else origin
+        else:
+            source = f"MySQL/{origin}"
         evidence: TraceEvidence = {
             "tool": "inspect_target_trace",
             "checkpoint": name,
-            "origin": _ORIGINS[name],
-            "source": f"{self.source}#{name}",
+            "origin": origin,
+            "source": source,
             "observed_at": self.captured_at,
             "outcome": "missing",
         }
-        section = self.data.get(name)
         if section is None:
             evidence["reason"] = "section_not_captured"
             return evidence, {}
@@ -145,34 +152,40 @@ class HireHubSnapshotAdapter:
 
     def inspect_trace(self, entity_id: int) -> TargetTraceRead:
         source = self.path.absolute().as_uri()
-
-        def unavailable(reason: str) -> TargetTraceRead:
-            return {
-                "outcome": "missing",
-                "environment": None,
-                "vhost": None,
-                "message_id": None,
-                "checks": [
-                    {
-                        "tool": "inspect_target_trace",
-                        "checkpoint": "snapshot",
-                        "origin": "snapshot_file",
-                        "source": source,
-                        "observed_at": datetime.now(timezone.utc).isoformat(),
-                        "outcome": "missing",
-                        "reason": reason,
-                    }
-                ],
-            }
-
         try:
             data = json.loads(self.path.read_text(encoding="utf-8-sig"))
         except OSError:
-            return unavailable("snapshot_unreadable")
+            return self._unavailable("snapshot_unreadable", source)
         except (UnicodeError, json.JSONDecodeError):
-            return unavailable("invalid_snapshot")
+            return self._unavailable("invalid_snapshot", source)
+        return self.inspect_data(data, entity_id, file_source=source)
+
+    @staticmethod
+    def _unavailable(reason: str, file_source: str | None) -> TargetTraceRead:
+        return {
+            "outcome": "missing",
+            "environment": None,
+            "vhost": None,
+            "message_id": None,
+            "checks": [
+                {
+                    "tool": "inspect_target_trace",
+                    "checkpoint": "snapshot",
+                    "origin": "snapshot_file" if file_source else "hirehub_capture",
+                    "source": file_source or "HireHub live capture",
+                    "observed_at": datetime.now(timezone.utc).isoformat(),
+                    "outcome": "missing",
+                    "reason": reason,
+                }
+            ],
+        }
+
+    @classmethod
+    def inspect_data(
+        cls, data: object, entity_id: int, *, file_source: str | None = None
+    ) -> TargetTraceRead:
         if not isinstance(data, dict):
-            return unavailable("invalid_snapshot")
+            return cls._unavailable("invalid_snapshot", file_source)
 
         environment = data.get("environment")
         vhost = data.get("vhost")
@@ -187,11 +200,22 @@ class HireHubSnapshotAdapter:
             or type(snapshot_id) is not int
             or snapshot_id <= 0
         ):
-            return unavailable("invalid_snapshot")
+            return cls._unavailable("invalid_snapshot", file_source)
         if snapshot_id != entity_id:
-            return unavailable("delivery_id_mismatch")
+            return cls._unavailable("delivery_id_mismatch", file_source)
 
-        snapshot = _Snapshot(data, source, captured_at)
+        snapshot = _Snapshot(data, file_source, captured_at)
+        trace = cls._correlate(snapshot, entity_id, environment, vhost)
+        if file_source is None or trace["message_id"] is not None:
+            trace["checks"].append(snapshot.queue())
+        if file_source is None and not any(check["outcome"] == "observed" for check in trace["checks"]):
+            trace["outcome"] = trace["checks"][0]["outcome"]
+        return trace
+
+    @classmethod
+    def _correlate(
+        cls, snapshot: _Snapshot, entity_id: int, environment: str, vhost: str
+    ) -> TargetTraceRead:
         delivery, rows = snapshot.rows("delivery")
         trace: TargetTraceRead = {
             "outcome": "observed",
@@ -247,12 +271,11 @@ class HireHubSnapshotAdapter:
                 outbox[checkpoint_time] = timestamp
         trace["message_id"] = message_id
 
-        for branch in self.branches:
+        for branch in cls.branches:
             evidence, rows = snapshot.rows(branch, message_id=message_id)
             if len(rows) == 1:
                 recorded_at = _timestamp(rows[0].get("recorded_at"))
                 if recorded_at is not None:
                     evidence["recorded_at"] = recorded_at
             trace["checks"].append(evidence)
-        trace["checks"].append(snapshot.queue())
         return trace

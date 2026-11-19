@@ -75,7 +75,7 @@ def run_target_trace(
             summary = ["The target trace resolved a unique message ID."]
         for branch, status in branches.items():
             if status == "observed":
-                summary.append(f"{branch} has a processing record in the snapshot.")
+                summary.append(f"{branch} has an observed processing record.")
             elif status == "not_observed":
                 summary.append(
                     f"{branch} lookup succeeded and returned zero processing records."

@@ -64,6 +64,16 @@ New-Item -ItemType Directory -Force .opspilot | Out-Null
 
 采集命令输出最小字段。接收人核对只保留布尔值或未知值。各来源分别记录读取时间和结果，单项查询失败时保留其他可读取的证据。
 
+## 直接诊断隔离环境
+
+使用相同的依赖和只读凭据，`diagnose-hirehub` 可在一次运行中采集并保存报告。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot diagnose-hirehub --environment hirehub-local --delivery-id 1001 --recipient-id 4002 --mysql-host 127.0.0.1 --mysql-port 13306 --management-url http://127.0.0.1:15673 --vhost "/" "投递成功，但 HR 未收到站内通知"
+```
+
+报告直接记录 MySQL 表和 RabbitMQ Management 请求地址。无法关联唯一 Outbox 消息时，已读取的队列指标仍可作为环境证据保留。需要保存原始快照以便复查时，使用 `capture-hirehub` 导出。
+
 ## 真实验收结果
 
 隔离环境运行 `15ee3f9` 的 Delivery、Job、Notification，以及 MySQL 8.0.46、Redis 和 RabbitMQ 3.13.7。预置合成投递及 Outbox 记录后，由真实服务发送和消费消息。Elasticsearch 索引的启动检查使用本地测试响应。

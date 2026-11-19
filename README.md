@@ -148,4 +148,4 @@ $env:OPSPILOT_RABBITMQ_PASSWORD = "opspilot_local_only"
 .\.venv\Scripts\python.exe -m pytest tests/test_rabbitmq_live.py --rabbitmq-live --java-target -q
 ```
 
-HireHub 的投递通知用例已通过隔离环境验收。用 `capture-hirehub` 只读采集实时证据，或直接用 `diagnose-hirehub` 读取仓库中的合成快照。 [HireHub 只读验收](docs/hirehub-readonly-acceptance.md)
+HireHub 的投递通知用例已通过隔离环境验收。`diagnose-hirehub` 支持直接诊断隔离环境或读取本地快照，`capture-hirehub` 可单独导出证据。 [HireHub 只读验收](docs/hirehub-readonly-acceptance.md)

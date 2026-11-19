@@ -1,11 +1,13 @@
 """Capture the minimal HireHub evidence consumed by the snapshot adapter."""
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from opspilot.adapters.hirehub_snapshot import CONSUMERS
+from opspilot.adapters.hirehub_snapshot import CONSUMERS, HireHubSnapshotAdapter
 from opspilot.connectors.mysql import MySQLConnector, MySQLRead
 from opspilot.connectors.rabbitmq import RabbitMQQueueConnector
+from opspilot.core.target_trace import TargetTraceRead
 
 _DELIVERY = "SELECT id AS delivery_id, status FROM hirehub_delivery.delivery WHERE id = %s"
 _OUTBOX = """
@@ -76,6 +78,7 @@ def capture_hirehub_snapshot(
     queue = rabbitmq.inspect_queue()
     snapshot["queue"] = {
         "name": rabbitmq.queue,
+        "source": queue["source"],
         "outcome": queue["outcome"],
         "observed_at": queue["observed_at"],
         "pending_messages": queue.get("pending_messages"),
@@ -84,3 +87,21 @@ def capture_hirehub_snapshot(
     }
     snapshot["captured_at"] = datetime.now(timezone.utc).isoformat()
     return snapshot
+
+
+@dataclass(frozen=True)
+class HireHubLiveAdapter:
+    mysql: MySQLConnector
+    rabbitmq: RabbitMQQueueConnector
+    environment: str
+    recipient_id: int
+    branches = HireHubSnapshotAdapter.branches
+
+    def capture(self, delivery_id: int) -> dict[str, Any]:
+        return capture_hirehub_snapshot(
+            self.mysql, self.rabbitmq, environment=self.environment, delivery_id=delivery_id,
+            recipient_id=self.recipient_id,
+        )
+
+    def inspect_trace(self, entity_id: int) -> TargetTraceRead:
+        return HireHubSnapshotAdapter.inspect_data(self.capture(entity_id), entity_id)

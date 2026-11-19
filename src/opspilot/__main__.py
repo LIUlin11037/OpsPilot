@@ -6,7 +6,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-from opspilot.adapters.hirehub_capture import capture_hirehub_snapshot
+from opspilot.adapters.hirehub_capture import HireHubLiveAdapter
 from opspilot.adapters.hirehub_snapshot import NOTIFICATION_QUEUE, HireHubSnapshotAdapter
 from opspilot.adapters.http_processing import HttpProcessingAdapter
 from opspilot.adapters.json_processing import JsonProcessingAdapter
@@ -31,6 +31,14 @@ def _add_queue_options(
     parser.add_argument(
         "--timeout", type=float, metavar="SECONDS", help="Socket timeout (default: 5)."
     )
+
+
+def _add_hirehub_live_options(parser: argparse.ArgumentParser, *, required: bool) -> None:
+    parser.add_argument("--environment", required=required, help="Isolated environment label.")
+    parser.add_argument("--recipient-id", type=int, required=required, help="Expected HR user ID.")
+    parser.add_argument("--mysql-host", help="MySQL host (default: 127.0.0.1).")
+    parser.add_argument("--mysql-port", type=int, help="MySQL port (default: 3306).")
+    _add_queue_options(parser, fixed_queue=NOTIFICATION_QUEUE)
 
 
 def _rabbitmq_connector(
@@ -71,7 +79,11 @@ def _target_processing_tool(
     return None
 
 
-def _capture_hirehub(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+def _hirehub_live_adapter(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> HireHubLiveAdapter:
+    if args.environment is None or args.recipient_id is None:
+        parser.error("--management-url requires --environment and --recipient-id")
     if args.delivery_id <= 0 or args.recipient_id <= 0:
         parser.error("--delivery-id and --recipient-id must be positive")
     environment = args.environment.strip()
@@ -86,15 +98,15 @@ def _capture_hirehub(args: argparse.Namespace, parser: argparse.ArgumentParser) 
     queue = _rabbitmq_connector(args, parser)
     try:
         mysql = MySQLConnector(
-            args.mysql_host, args.mysql_port, username, password, queue.timeout_seconds
-        )
-        snapshot = capture_hirehub_snapshot(
-            mysql, queue, environment=environment,
-            delivery_id=args.delivery_id, recipient_id=args.recipient_id,
+            host="127.0.0.1" if args.mysql_host is None else args.mysql_host,
+            port=3306 if args.mysql_port is None else args.mysql_port,
+            username=username,
+            password=password,
+            timeout_seconds=queue.timeout_seconds,
         )
     except ValueError as error:
         parser.error(str(error))
-    print(json.dumps(snapshot, indent=2))
+    return HireHubLiveAdapter(mysql, queue, environment, args.recipient_id)
 
 
 def main() -> None:
@@ -154,21 +166,20 @@ def main() -> None:
     diagnose.add_argument("--message-id", help="Look up processing records for an exact ID.")
     diagnose.add_argument("question", help="Incident description.")
     hirehub = commands.add_parser(
-        "diagnose-hirehub", help="Diagnose a delivery from a read-only HireHub snapshot."
+        "diagnose-hirehub", help="Diagnose a HireHub delivery with live reads or a snapshot."
     )
-    hirehub.add_argument("--snapshot", type=Path, required=True)
+    hirehub_source = hirehub.add_mutually_exclusive_group(required=True)
+    hirehub_source.add_argument("--snapshot", type=Path, help="Local HireHub evidence snapshot.")
+    hirehub_source.add_argument("--management-url", help="RabbitMQ Management API base URL.")
+    _add_hirehub_live_options(hirehub, required=False)
     hirehub.add_argument("--delivery-id", type=int, required=True)
     hirehub.add_argument("question", help="Incident description.")
     capture = commands.add_parser(
         "capture-hirehub", help="Export live HireHub observations as a read-only snapshot."
     )
-    capture.add_argument("--environment", required=True, help="Isolated environment label.")
     capture.add_argument("--delivery-id", type=int, required=True)
-    capture.add_argument("--recipient-id", type=int, required=True, help="Expected HR user ID.")
-    capture.add_argument("--mysql-host", default="127.0.0.1")
-    capture.add_argument("--mysql-port", type=int, default=3306)
     capture.add_argument("--management-url", required=True, help="RabbitMQ Management API base URL.")
-    _add_queue_options(capture, fixed_queue=NOTIFICATION_QUEUE)
+    _add_hirehub_live_options(capture, required=True)
     report_command = commands.add_parser("report", help="Show a saved report.")
     report_command.add_argument("task_id", help="Task ID returned by diagnose.")
     inspect_queue = commands.add_parser(
@@ -184,7 +195,12 @@ def main() -> None:
         return
 
     if args.command == "capture-hirehub":
-        _capture_hirehub(args, capture)
+        adapter = _hirehub_live_adapter(args, capture)
+        try:
+            snapshot = adapter.capture(args.delivery_id)
+        except ValueError as error:
+            capture.error(str(error))
+        print(json.dumps(snapshot, indent=2))
         return
 
     if args.command == "inspect-queue":
@@ -209,9 +225,19 @@ def main() -> None:
                 hirehub.error("question must not be empty")
             if args.delivery_id <= 0:
                 hirehub.error("--delivery-id must be positive")
-            report = run_target_trace(
-                question, args.delivery_id, HireHubSnapshotAdapter(args.snapshot)
-            )
+            if args.snapshot is None:
+                target = _hirehub_live_adapter(args, hirehub)
+            else:
+                if any(option is not None for option in (
+                    args.environment, args.recipient_id, args.mysql_host,
+                    args.mysql_port, args.vhost, args.timeout,
+                )):
+                    hirehub.error("live connection options require --management-url")
+                target = HireHubSnapshotAdapter(args.snapshot)
+            try:
+                report = run_target_trace(question, args.delivery_id, target)
+            except ValueError as error:
+                hirehub.error(str(error))
             stored_report = save_report(args.db, report)
         else:
             question = args.question.strip()
