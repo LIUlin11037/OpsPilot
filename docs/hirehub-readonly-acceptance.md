@@ -66,7 +66,9 @@ New-Item -ItemType Directory -Force .opspilot | Out-Null
 
 ## 真实验收结果
 
-隔离环境运行 `15ee3f9` 的 Delivery、Job、Notification，以及 MySQL 8.0.46、Redis 和 RabbitMQ 3.13.7。预置合成投递及 Outbox 记录后，由真实服务发送和消费消息。Elasticsearch 索引的启动检查使用本地测试响应。该次验收使用临时脚本导出快照。
+隔离环境运行 `15ee3f9` 的 Delivery、Job、Notification，以及 MySQL 8.0.46、Redis 和 RabbitMQ 3.13.7。预置合成投递及 Outbox 记录后，由真实服务发送和消费消息。Elasticsearch 索引的启动检查使用本地测试响应。
+
+首轮验收通过临时脚本导出快照。随后以 OpsPilot `416e185` 的 `capture-hirehub` 在相同版本的隔离环境复验，通过 MySQL `SELECT` 和 RabbitMQ Management `GET` 直接采集三份快照，并用 `diagnose-hirehub` 生成报告。
 
 | 场景 | 观测结果 | Notification 分支 |
 | --- | --- | --- |
