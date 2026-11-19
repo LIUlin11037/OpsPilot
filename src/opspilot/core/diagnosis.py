@@ -102,6 +102,17 @@ def _after_queue(state: DiagnosisState) -> Literal["inspect_consumer", "report"]
     return "report"
 
 
+def _after_queue_with_processing(
+    state: DiagnosisState,
+) -> Literal["inspect_processing", "report"]:
+    queue = state["queue"]
+    if queue["outcome"] == "observed":
+        unacknowledged = queue.get("unacknowledged_messages") or 0
+        if queue["pending_messages"] > 0 or unacknowledged > 0:
+            return "inspect_processing"
+    return "report"
+
+
 def _after_consumer(state: DiagnosisState) -> Literal["inspect_processing", "report"]:
     consumer = state["consumer"]
     if consumer["outcome"] == "observed" and consumer["running"]:
@@ -159,6 +170,22 @@ def _conclude_queue_snapshot(queue: QueueEvidence) -> tuple[DiagnosisStatus, str
     )
 
 
+def _processing_summary(
+    processing: ProcessingEvidence | UnavailableEvidence,
+    correlation: ProcessingCorrelation | None,
+) -> str:
+    if processing["outcome"] != "observed":
+        failure = _describe_failure(processing["outcome"])
+        return f"Processing inspection {failure}."
+
+    detail = f"The latest processing attempt {processing['result']}."
+    if correlation == "matched":
+        return f"{detail} Its message ID matches a sampled pending message."
+    if correlation == "not_in_sample":
+        return f"{detail} Its message ID was absent from the pending-message sample."
+    return f"{detail} Message correlation is unknown."
+
+
 def _conclude(
     state: DiagnosisState, correlation: ProcessingCorrelation | None
 ) -> tuple[DiagnosisStatus, str]:
@@ -169,7 +196,11 @@ def _conclude(
 
     consumer = state.get("consumer")
     if consumer is None:
-        return _conclude_queue_snapshot(queue)
+        status, conclusion = _conclude_queue_snapshot(queue)
+        processing = state.get("processing")
+        if processing is not None:
+            conclusion = f"{conclusion} {_processing_summary(processing, correlation)}"
+        return status, conclusion
 
     if consumer["outcome"] != "observed":
         failure = _describe_failure(consumer["outcome"])
@@ -184,19 +215,7 @@ def _conclude(
             "The queue has pending messages and the consumer is stopped.",
         )
 
-    processing = state["processing"]
-    if processing["outcome"] == "observed":
-        detail = f"The latest processing attempt {processing['result']}."
-        if correlation == "matched":
-            detail += " Its message ID matches a sampled pending message."
-        elif correlation == "not_in_sample":
-            detail += " Its message ID was absent from the pending-message sample."
-        else:
-            detail += " Message correlation is unknown."
-    else:
-        failure = _describe_failure(processing["outcome"])
-        detail = f"Processing inspection {failure}."
-
+    detail = _processing_summary(state["processing"], correlation)
     return "undetermined", (
         "The queue has pending messages and the consumer is running. "
         f"{detail} The cause of the backlog is undetermined."
@@ -251,9 +270,22 @@ def _queue_graph(tool: QueueTool) -> StateGraph:
     return graph
 
 
-def run_queue_diagnosis(question: str, tool: QueueTool) -> DiagnosisReport:
+def _add_processing_node(graph: StateGraph, tool: ProcessingTool) -> None:
+    graph.add_node(
+        "inspect_processing", partial(_inspect, "processing", tool.inspect_processing)
+    )
+    graph.add_edge("inspect_processing", "report")
+
+
+def run_queue_diagnosis(
+    question: str, tool: QueueTool, processing_tool: ProcessingTool | None = None
+) -> DiagnosisReport:
     graph = _queue_graph(tool)
-    graph.add_edge("inspect_queue", "report")
+    if processing_tool is None:
+        graph.add_edge("inspect_queue", "report")
+    else:
+        _add_processing_node(graph, processing_tool)
+        graph.add_conditional_edges("inspect_queue", _after_queue_with_processing)
     return graph.compile().invoke({"question": question})["report"]
 
 
@@ -264,11 +296,7 @@ def run_diagnosis(
     graph.add_node(
         "inspect_consumer", partial(_inspect, "consumer", tools.inspect_consumer)
     )
-    graph.add_node(
-        "inspect_processing",
-        partial(_inspect, "processing", processing_tool.inspect_processing),
-    )
+    _add_processing_node(graph, processing_tool)
     graph.add_conditional_edges("inspect_queue", _after_queue)
     graph.add_conditional_edges("inspect_consumer", _after_consumer)
-    graph.add_edge("inspect_processing", "report")
     return graph.compile().invoke({"question": question})["report"]

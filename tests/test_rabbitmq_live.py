@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import monotonic, sleep
 
@@ -144,19 +145,40 @@ def test_live_queue_lifecycle(
             )
             delivered_snapshot = (MESSAGE_COUNT - prefetch, prefetch, 1)
             _wait_for_snapshot(connector, delivered_snapshot)
+            record = Path(directory) / "processing.json"
+            record.write_text(
+                json.dumps(
+                    {
+                        "queue": name,
+                        "vhost": parameters.virtual_host,
+                        "message_id": "acceptance-msg-1",
+                        "result": "failed",
+                        "attempted_at": "2026-11-19T03:00:00Z",
+                    }
+                ),
+                encoding="utf-8",
+            )
             delivered = _run_cli(
                 directory,
                 "diagnose",
                 *queue_options,
+                "--processing-record",
+                str(record),
                 "Check deliveries awaiting acknowledgement",
             )
             assert delivered["status"] == diagnosis_status
-            evidence, = delivered["evidence"]
+            evidence, processing = delivered["evidence"]
             assert _snapshot(evidence) == delivered_snapshot
             assert f"awaiting acknowledgement is {prefetch}" in delivered["conclusion"]
-            call, = delivered["tool_calls"]
-            assert call["tool"] == "inspect_queue"
-            assert call["outcome"] == "observed"
-            assert call["duration_ms"] >= 0
+            assert delivered["processing_correlation"] == "unknown"
+            assert processing["message_id"] == "acceptance-msg-1"
+            assert processing["result"] == "failed"
+            assert processing["source"] == record.as_uri()
+            assert [call["tool"] for call in delivered["tool_calls"]] == [
+                "inspect_queue",
+                "inspect_processing",
+            ]
+            assert all(call["outcome"] == "observed" for call in delivered["tool_calls"])
+            assert all(call["duration_ms"] >= 0 for call in delivered["tool_calls"])
             saved = _run_cli(directory, "report", delivered["task_id"])
             assert saved == delivered

@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event, Thread
 
@@ -282,3 +283,66 @@ def test_rabbitmq_diagnosis_saves_queue_evidence(
             assert "registered consumer count is unavailable" in report["conclusion"]
         else:
             assert f"registered consumer count of {registered}" in report["conclusion"]
+
+
+@pytest.mark.parametrize(
+    ("http_status", "pending", "unacknowledged", "expected_outcomes"),
+    [
+        (200, 0, 0, ["observed"]),
+        (403, 0, 0, ["missing"]),
+        (200, 3, 0, ["observed", "missing"]),
+        (200, 0, 3, ["observed", "observed"]),
+    ],
+)
+def test_rabbitmq_diagnosis_reads_record_only_for_observed_queue_activity(
+    http_status: int, pending: int, unacknowledged: int, expected_outcomes: list[str]
+) -> None:
+    body = json.dumps(
+        {
+            "messages_ready": pending,
+            "messages_unacknowledged": unacknowledged,
+            "consumers": 0,
+        }
+    ).encode()
+
+    with TemporaryDirectory(prefix="opspilot-rabbitmq-test-") as directory:
+        record = Path(directory) / "processing.json"
+        if unacknowledged > 0:
+            record.write_text(
+                json.dumps(
+                    {
+                        "queue": "orders",
+                        "vhost": "/",
+                        "message_id": "msg-101",
+                        "result": "succeeded",
+                        "attempted_at": "2026-11-19T03:00:00Z",
+                    }
+                ),
+                encoding="utf-8",
+            )
+        with _management_api(body, status=http_status) as (url, requests):
+            result = _cli(
+                "diagnose",
+                "--management-url",
+                url,
+                "--queue",
+                "orders",
+                "--processing-record",
+                str(record),
+                "Investigate deliveries",
+                cwd=directory,
+            )
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert len(requests) == 1
+    assert [call["outcome"] for call in report["tool_calls"]] == expected_outcomes
+    if pending > 0:
+        assert report["processing_correlation"] == "unknown"
+        assert report["evidence"][1]["reason"] == "record_not_found"
+    elif unacknowledged > 0:
+        assert report["status"] == "no_backlog_observed"
+        assert report["processing_correlation"] == "unknown"
+        assert report["evidence"][1]["result"] == "succeeded"
+        assert "The latest processing attempt succeeded." in report["conclusion"]
+    else:
+        assert report["processing_correlation"] is None

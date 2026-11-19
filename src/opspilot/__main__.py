@@ -6,6 +6,7 @@ import os
 import sqlite3
 from pathlib import Path
 
+from opspilot.adapters.json_processing import JsonProcessingAdapter
 from opspilot.adapters.simulated import SimulatedProcessingAdapter
 from opspilot.connectors.rabbitmq import RabbitMQQueueConnector
 from opspilot.connectors.simulated import SimulatedQueueConnector
@@ -92,6 +93,9 @@ def main() -> None:
     source.add_argument("--scenario", choices=scenarios)
     source.add_argument("--management-url", help="RabbitMQ Management API base URL.")
     _add_queue_options(diagnose)
+    diagnose.add_argument(
+        "--processing-record", type=Path, help="Read a target's JSON processing record."
+    )
     diagnose.add_argument("question", help="Incident description.")
     report_command = commands.add_parser("report", help="Show a saved report.")
     report_command.add_argument("task_id", help="Task ID returned by diagnose.")
@@ -129,11 +133,18 @@ def main() -> None:
                 diagnose.error("question must not be empty")
             if args.management_url is not None:
                 queue_tool = _rabbitmq_connector(args, diagnose)
+                processing_tool = None
+                if args.processing_record is not None:
+                    processing_tool = JsonProcessingAdapter(
+                        args.processing_record, queue=queue_tool.queue, vhost=queue_tool.vhost
+                    )
                 try:
-                    report = run_queue_diagnosis(question, queue_tool)
+                    report = run_queue_diagnosis(question, queue_tool, processing_tool)
                 except ValueError as error:
                     diagnose.error(str(error))
             else:
+                if args.processing_record is not None:
+                    diagnose.error("--processing-record requires --management-url")
                 if any(value is not None for value in (args.queue, args.vhost, args.timeout)):
                     diagnose.error("--queue, --vhost, and --timeout require --management-url")
                 simulated_queue, adapter = scenarios[args.scenario]

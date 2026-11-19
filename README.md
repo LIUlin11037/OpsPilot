@@ -69,6 +69,26 @@ JSON 报告包含任务 ID、用户提交的问题、诊断状态和结论。每
 
 RabbitMQ 模式保留队列证据及读取耗时。报告分别描述待投递数和已投递待确认数。待投递数为零时，`no_backlog_observed` 仅表示当次未观测到等待投递的消息，报告仍会列出待确认数。发现待投递积压时，报告也会说明消费者注册数，根因标为 `undetermined`。
 
+### 结合业务处理记录
+
+目标系统可以将最近一次处理尝试导出为 UTF-8 JSON。将下例保存为 `processing.json`，并用实际的队列、消息 ID、结果和时间替换示例值。`result` 支持 `succeeded` 和 `failed`，`attempted_at` 使用带时区的 ISO 8601 时间。
+
+```json
+{
+  "vhost": "/",
+  "queue": "orders",
+  "message_id": "order-msg-101",
+  "result": "failed",
+  "attempted_at": "2026-11-19T03:00:00Z"
+}
+```
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot diagnose --management-url http://127.0.0.1:15672 --queue "orders" --processing-record "processing.json" "这个队列有积压吗？"
+```
+
+队列查询成功且待投递数或待确认数大于零时，OpsPilot 会尝试读取记录。队列和虚拟主机匹配的记录会保留在报告中；文件缺失、内容无效或目标不匹配时，报告会保留不可用原因。RabbitMQ 队列指标的消息 ID 样本为空，消息关联标为 `unknown`，待投递积压的根因仍标为 `undetermined`。
+
 ## RabbitMQ 验收测试
 
 默认 pytest 在离线环境运行。真实验收需要一个独立的 RabbitMQ 测试实例，开启 Management 插件及队列统计。可以在单独的 PowerShell 窗口启动下面的临时容器，启动完成后再运行测试。运行结束后用 Ctrl+C 停止容器。 [RabbitMQ 容器文档](https://www.rabbitmq.com/docs/download)
@@ -88,4 +108,4 @@ $env:OPSPILOT_RABBITMQ_PASSWORD = "opspilot_local_only"
 .\.venv\Scripts\python.exe -m pytest tests/test_rabbitmq_live.py --rabbitmq-live -q
 ```
 
-测试覆盖空队列、有待投递且无订阅、部分已投递待确认、全部已投递待确认，以及按任务 ID 回看报告。每次测试使用 broker 生成的独占队列和临时 SQLite，结束时随连接和临时目录一起清理。
+测试覆盖空队列、有待投递且无订阅、部分及全部消息已投递待确认、业务记录读取，以及按任务 ID 回看报告。每次测试使用 broker 生成的独占队列和临时 SQLite，结束时随连接和临时目录一起清理。
