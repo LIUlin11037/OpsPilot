@@ -28,14 +28,12 @@ class TraceComparison(TypedDict):
     changes: list[FieldChange]
 
 
-class QueueComparison(TypedDict):
-    before_task_id: str
-    after_task_id: str
-    queue_source: str
-    changes: list[FieldChange]
-
-
-HealthRole = Literal["service", "dependency"]
+HealthRole = Literal["service", "dependency", "consumer"]
+_HTTP_HEALTH_ROLES: dict[str, HealthRole] = {
+    "inspect_service_health": "service",
+    "inspect_dependency_health": "dependency",
+}
+_CONSUMER_HEALTH_ROLES: dict[str, HealthRole] = {"inspect_consumer_endpoint": "consumer"}
 
 
 class EndpointObservation(TypedDict):
@@ -45,12 +43,26 @@ class EndpointObservation(TypedDict):
     reason: str | None
 
 
+EndpointObservations = dict[tuple[HealthRole, str, int], EndpointObservation]
+
+
 class EndpointChange(TypedDict):
     role: HealthRole
     source: str
     occurrence: int
     before: EndpointObservation | None
     after: EndpointObservation | None
+
+
+class QueueComparisonFields(TypedDict):
+    before_task_id: str
+    after_task_id: str
+    queue_source: str
+    changes: list[FieldChange]
+
+
+class QueueComparison(QueueComparisonFields, total=False):
+    consumer_health_changes: list[EndpointChange]
 
 
 class HealthComparison(TypedDict):
@@ -141,45 +153,69 @@ def _queue_observation(report: StoredReport) -> tuple[str, dict[str, ComparisonV
     return queue["source"], values
 
 
-def compare_queue_reports(before: StoredReport, after: StoredReport) -> QueueComparison:
+def compare_queue_reports(
+    before: StoredReport, after: StoredReport, *, include_consumer_health: bool = False,
+) -> QueueComparison:
     source, before_values = _queue_observation(before)
     after_source, after_values = _queue_observation(after)
     if source != after_source:
         raise ValueError("Reports must match on the queue evidence source.")
-    return {
+    comparison: QueueComparison = {
         "before_task_id": before["task_id"],
         "after_task_id": after["task_id"],
         "queue_source": source,
         "changes": _changed_fields(before_values, after_values),
     }
+    if include_consumer_health:
+        comparison["consumer_health_changes"] = _endpoint_changes(
+            _endpoint_observations(before["evidence"], _CONSUMER_HEALTH_ROLES),
+            _endpoint_observations(after["evidence"], _CONSUMER_HEALTH_ROLES),
+        )
+    return comparison
 
 
-def _health_observations(
-    report: StoredReport,
-) -> tuple[str, dict[tuple[HealthRole, str, int], EndpointObservation]]:
-    observations: dict[tuple[HealthRole, str, int], EndpointObservation] = {}
+def _endpoint_observations(
+    evidence: list[Evidence], roles: dict[str, HealthRole],
+) -> EndpointObservations:
+    observations: EndpointObservations = {}
     counts: dict[tuple[HealthRole, str], int] = {}
-    services: list[str] = []
-    for evidence in report["evidence"]:
-        tool = evidence["tool"]
-        if tool not in ("inspect_service_health", "inspect_dependency_health"):
+    for item in evidence:
+        role = roles.get(item["tool"])
+        if role is None:
             continue
-        source = evidence["source"]
-        role: HealthRole = "service" if tool == "inspect_service_health" else "dependency"
-        if role == "service":
-            services.append(source)
+        source = item["source"]
         key = (role, source)
         occurrence = counts.get(key, 0) + 1
         counts[key] = occurrence
         observations[(role, source, occurrence)] = {
-            "health": evidence["health"],
-            "outcome": evidence["outcome"],
-            "http_status": evidence.get("http_status"),
-            "reason": evidence.get("reason"),
+            "health": item["health"],
+            "outcome": item["outcome"],
+            "http_status": item.get("http_status"),
+            "reason": item.get("reason"),
         }
+    return observations
+
+
+def _health_observations(report: StoredReport) -> tuple[str, EndpointObservations]:
+    observations = _endpoint_observations(report["evidence"], _HTTP_HEALTH_ROLES)
+    services = [source for role, source, _ in observations if role == "service"]
     if len(services) != 1:
         raise ValueError("Both task IDs must refer to HTTP health reports with one service endpoint.")
     return services[0], observations
+
+
+def _endpoint_changes(before: EndpointObservations, after: EndpointObservations) -> list[EndpointChange]:
+    changes: list[EndpointChange] = []
+    for role, source, occurrence in before | after:
+        key = (role, source, occurrence)
+        previous = before.get(key)
+        current = after.get(key)
+        if current != previous:
+            changes.append({
+                "role": role, "source": source, "occurrence": occurrence,
+                "before": previous, "after": current,
+            })
+    return changes
 
 
 def compare_health_reports(before: StoredReport, after: StoredReport) -> HealthComparison:
@@ -188,19 +224,9 @@ def compare_health_reports(before: StoredReport, after: StoredReport) -> HealthC
     if service != after_service:
         raise ValueError("Reports must match on the service endpoint URL.")
 
-    changes: list[EndpointChange] = []
-    for role, source, occurrence in before_values | after_values:
-        key = (role, source, occurrence)
-        previous = before_values.get(key)
-        current = after_values.get(key)
-        if current != previous:
-            changes.append({
-                "role": role, "source": source, "occurrence": occurrence,
-                "before": previous, "after": current,
-            })
     return {
         "before_task_id": before["task_id"],
         "after_task_id": after["task_id"],
         "service_url": service,
-        "changes": changes,
+        "changes": _endpoint_changes(before_values, after_values),
     }

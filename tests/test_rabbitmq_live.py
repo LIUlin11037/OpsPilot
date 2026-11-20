@@ -250,6 +250,14 @@ def test_live_queue_lifecycle(
             assert all(call["duration_ms"] >= 0 for call in delivered["tool_calls"])
             saved = _run_cli(directory, "report", delivered["task_id"])
             assert saved == delivered
+            recovery = _run_cli(
+                directory, "compare-queue", backlog["task_id"], delivered["task_id"],
+                "--include-consumer-health",
+            )
+            recovered, = recovery["consumer_health_changes"]
+            assert recovered["source"] == health_url
+            assert recovered["before"]["http_status"] == 503
+            assert recovered["after"]["http_status"] == 204
 
             for remaining in range(MESSAGE_COUNT, 0, -prefetch):
                 in_flight = min(remaining, prefetch)
@@ -261,8 +269,13 @@ def test_live_queue_lifecycle(
             assert len(drained["evidence"]) == 1
             assert _snapshot(drained["evidence"][0]) == (0, 0, 1)
             assert health_requests == ["/health", "/health"]
-            compared = _run_cli(directory, "compare-queue", delivered["task_id"], drained["task_id"])
+            compared = _run_cli(
+                directory, "compare-queue", delivered["task_id"], drained["task_id"],
+                "--include-consumer-health",
+            )
             assert compared["queue_source"] == queue_evidence["source"]
+            skipped, = compared["consumer_health_changes"]
+            assert skipped["source"] == health_url and skipped["after"] is None
             changes = {
                 change["field"]: (change["before"], change["after"])
                 for change in compared["changes"]

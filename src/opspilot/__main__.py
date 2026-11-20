@@ -282,6 +282,10 @@ def main() -> None:
     report_comparisons["compare-http-latest"].add_argument(
         "--service-url", required=True, help="Match the exact main service health URL."
     )
+    report_comparisons["compare-queue"].add_argument(
+        "--include-consumer-health", action="store_true",
+        help="Include changes in saved consumer endpoint observations.",
+    )
     inspect_queue = commands.add_parser(
         "inspect-queue", help="Read queue metrics from RabbitMQ Management."
     )
@@ -343,7 +347,9 @@ def main() -> None:
                 if args.command == "compare-hirehub":
                     comparison = compare_trace_reports(before, after)
                 elif args.command == "compare-queue":
-                    comparison = compare_queue_reports(before, after)
+                    comparison = compare_queue_reports(
+                        before, after, include_consumer_health=args.include_consumer_health,
+                    )
                 else:
                     comparison = compare_health_reports(before, after)
                     if args.format == "markdown":

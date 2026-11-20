@@ -20,6 +20,7 @@ EXAMPLE = Path(__file__).resolve().parents[1] / "examples/hirehub-notification-s
 SERVICE_URL = "http://127.0.0.1:8080/health"
 REDIS_URL = "redis://127.0.0.1:6379"
 QUEUE_SOURCE = "http://127.0.0.1:15672/api/queues/%2F/orders"
+CONSUMER_URL = "http://127.0.0.1:8081/health"
 
 
 def _compare(database: Path, command: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -43,10 +44,15 @@ def saved_queue_pair() -> Iterator[tuple[Path, StoredReport, StoredReport]]:
         "reason": "metric_missing", "http_status": 200,
         "unacknowledged_messages": 0, "registered_consumers": 0,
     }
+    consumer: HealthEvidence = {
+        "tool": "inspect_consumer_endpoint", "source": CONSUMER_URL,
+        "observed_at": "2026-11-20T06:00:01+00:00", "outcome": "observed",
+        "health": "unhealthy", "http_status": 503,
+    }
     before: DiagnosisReport = {
         "question": "Check the queue", "status": "undetermined",
         "conclusion": "Pending messages were observed.", "processing_correlation": None,
-        "evidence": [queue],
+        "evidence": [queue, consumer],
     }
     after: DiagnosisReport = {
         **before, "conclusion": "Pending message count is unavailable.", "evidence": [partial_queue],
@@ -76,6 +82,54 @@ def test_compare_queue_preserves_partial_observations_and_zero_counts(saved_queu
         ],
     }
     assert database.read_bytes() == original
+
+
+def test_compare_queue_can_include_a_skipped_consumer_check(saved_queue_pair) -> None:
+    database, before, after = saved_queue_pair
+    original = database.read_bytes()
+
+    result = _compare(
+        database, "compare-queue", before["task_id"], after["task_id"], "--include-consumer-health",
+    )
+
+    assert result.returncode == 0, result.stderr
+    comparison = json.loads(result.stdout)
+    baseline = compare_queue_reports(before, after)
+    assert comparison == {
+        **baseline,
+        "consumer_health_changes": [{
+            "role": "consumer", "source": CONSUMER_URL, "occurrence": 1,
+            "before": {"health": "unhealthy", "outcome": "observed", "http_status": 503, "reason": None},
+            "after": None,
+        }],
+    }
+    assert database.read_bytes() == original
+
+
+@pytest.mark.parametrize("source", [CONSUMER_URL, CONSUMER_URL + "/replacement"])
+def test_compare_queue_matches_consumer_checks_by_source(saved_queue_pair, source: str) -> None:
+    _, before, after = saved_queue_pair
+    timed_out: HealthEvidence = {
+        "tool": "inspect_consumer_endpoint", "source": source,
+        "observed_at": "2026-11-20T06:01:01+00:00", "outcome": "timeout",
+        "health": "unknown", "reason": "request_timeout",
+    }
+    after["evidence"].append(timed_out)
+
+    comparison = compare_queue_reports(before, after, include_consumer_health=True)
+
+    changes = comparison["consumer_health_changes"]
+    if source == CONSUMER_URL:
+        change, = changes
+        assert change["before"]["health"] == "unhealthy"
+    else:
+        prior, change = changes
+        assert prior["source"] == CONSUMER_URL and prior["after"] is None
+        assert change["before"] is None
+    assert change["source"] == source
+    assert change["after"] == {
+        "health": "unknown", "outcome": "timeout", "http_status": None, "reason": "request_timeout",
+    }
 
 
 def test_compare_queue_requires_the_same_queue_source(saved_queue_pair, saved_health_pair) -> None:
