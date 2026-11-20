@@ -15,9 +15,10 @@ from opspilot.adapters.simulated import SimulatedProcessingAdapter
 from opspilot.connectors.http_health import HttpHealthConnector
 from opspilot.connectors.mysql import MySQLConnector
 from opspilot.connectors.rabbitmq import RabbitMQQueueConnector
+from opspilot.connectors.redis_health import RedisHealthConnector
 from opspilot.connectors.simulated import SimulatedQueueConnector
 from opspilot.core.diagnosis import TargetProcessingTool, run_diagnosis, run_queue_diagnosis
-from opspilot.core.health_diagnosis import run_health_diagnosis
+from opspilot.core.health_diagnosis import HealthTool, run_health_diagnosis
 from opspilot.core.startup import run_startup
 from opspilot.core.target_trace import run_target_trace
 from opspilot.report_comparison import compare_trace_reports
@@ -179,7 +180,9 @@ def main() -> None:
     diagnose.add_argument("question", help="Incident description.")
     health = commands.add_parser("diagnose-http", help="Diagnose a service through its health endpoint.")
     health.add_argument("--service-url", required=True, help="Service health URL.")
-    health.add_argument("--dependency-url", help="Optional dependency health URL.")
+    dependency_source = health.add_mutually_exclusive_group()
+    dependency_source.add_argument("--dependency-url", help="Optional HTTP dependency health URL.")
+    dependency_source.add_argument("--redis-dependency-url", help="Optional Redis dependency URL.")
     health.add_argument(
         "--timeout", type=float, default=5.0, metavar="SECONDS", help="Socket timeout (default: 5)."
     )
@@ -272,10 +275,11 @@ def main() -> None:
                 health.error("question must not be empty")
             try:
                 service = HttpHealthConnector(args.service_url, args.timeout)
-                dependency = (
-                    HttpHealthConnector(args.dependency_url, args.timeout)
-                    if args.dependency_url is not None else None
-                )
+                dependency: HealthTool | None = None
+                if args.dependency_url is not None:
+                    dependency = HttpHealthConnector(args.dependency_url, args.timeout)
+                elif args.redis_dependency_url is not None:
+                    dependency = RedisHealthConnector(args.redis_dependency_url, args.timeout)
                 report = run_health_diagnosis(question, service, dependency)
             except ValueError as error:
                 health.error(str(error))

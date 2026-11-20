@@ -25,6 +25,12 @@ python -m venv .venv
 
 运行 `python -m pytest tests/test_http_health.py -q` 可用自动启停的本地 HTTP 服务复跑这条诊断流程。
 
+依赖是 Redis 时，可指定一个允许直接执行 `PING` 的 `redis://HOST[:PORT]` 端点。主服务异常时调用 `PING`，收到 `PONG` 时记录 Redis 端点可响应。超时、认证拒绝和异常响应记为 `unknown`。 [Redis PING 文档](https://redis.io/docs/latest/commands/ping/)
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot diagnose-http --service-url http://127.0.0.1:8080/health --redis-dependency-url redis://127.0.0.1:6379 "服务健康检查失败，Redis 能响应吗？"
+```
+
 ## 模拟诊断
 
 ```powershell
