@@ -127,6 +127,18 @@ def _require_report(database: Path, task_id: str, parser: argparse.ArgumentParse
     return report
 
 
+def _latest_health_task_ids(
+    database: Path, service_url: str, parser: argparse.ArgumentParser
+) -> tuple[str, str]:
+    if not service_url.strip():
+        parser.error("--service-url must not be empty")
+    reports = list_reports(database, limit=2, service_url=service_url)
+    if len(reports) < 2:
+        parser.exit(1, "opspilot: fewer than two saved health reports for the requested service URL\n")
+    follow_up, baseline = reports
+    return baseline["task_id"], follow_up["task_id"]
+
+
 def _health_config(args: argparse.Namespace) -> HealthConfig:
     if args.config is not None:
         if (
@@ -251,12 +263,20 @@ def main() -> None:
         "compare-http": commands.add_parser(
             "compare-http", help="Compare saved HTTP health reports for one service."
         ),
+        "compare-http-latest": commands.add_parser(
+            "compare-http-latest", help="Compare the two most recently saved reports for one HTTP service."
+        ),
     }
-    for comparison_parser in report_comparisons.values():
+    for command in ("compare-hirehub", "compare-http"):
+        comparison_parser = report_comparisons[command]
         comparison_parser.add_argument("before_task_id", help="Task ID of the baseline report.")
         comparison_parser.add_argument("after_task_id", help="Task ID of the follow-up report.")
-    report_comparisons["compare-http"].add_argument(
-        "--format", choices=("json", "markdown"), default="json"
+    for command in ("compare-http", "compare-http-latest"):
+        report_comparisons[command].add_argument(
+            "--format", choices=("json", "markdown"), default="json"
+        )
+    report_comparisons["compare-http-latest"].add_argument(
+        "--service-url", required=True, help="Match the exact main service health URL."
     )
     inspect_queue = commands.add_parser(
         "inspect-queue", help="Read queue metrics from RabbitMQ Management."
@@ -308,10 +328,15 @@ def main() -> None:
             print(json.dumps(summaries, indent=2))
             return
         if args.command in report_comparisons:
-            before = _require_report(args.db, args.before_task_id, parser)
-            after = _require_report(args.db, args.after_task_id, parser)
+            comparison_parser = report_comparisons[args.command]
+            if args.command == "compare-http-latest":
+                before_id, after_id = _latest_health_task_ids(args.db, args.service_url, comparison_parser)
+            else:
+                before_id, after_id = args.before_task_id, args.after_task_id
+            before = _require_report(args.db, before_id, parser)
+            after = _require_report(args.db, after_id, parser)
             try:
-                if args.command == "compare-http":
+                if args.command != "compare-hirehub":
                     comparison = compare_health_reports(before, after)
                     if args.format == "markdown":
                         markdown = render_health_comparison_markdown(comparison)
@@ -320,7 +345,7 @@ def main() -> None:
                 else:
                     comparison = compare_trace_reports(before, after)
             except ValueError as error:
-                report_comparisons[args.command].error(str(error))
+                comparison_parser.error(str(error))
             print(json.dumps(comparison, indent=2))
             return
         if args.command == "report":

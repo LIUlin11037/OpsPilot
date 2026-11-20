@@ -61,7 +61,13 @@ python -m venv .venv
 
 ### 对比复查报告
 
-对同一个服务 URL 提交两次诊断后，用 `reports --service-url` 查找任务 ID。筛选精确匹配主服务 URL，结果从最新到最早排列，`--limit` 限制匹配的报告数量。两份报告保存在同一个 SQLite 数据库，运行 `compare-http` 时按基准、复查的顺序传入任务 ID。
+用 `compare-http-latest --service-url` 比较同一 SQLite 数据库中该主服务最近保存的两份报告。较早的一份是基准，最新的一份是复查。URL 必须与报告中记录的主服务 URL 完全一致。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot compare-http-latest --service-url http://127.0.0.1:8080/health --format markdown
+```
+
+要比较指定报告，可用 `reports --service-url` 查找任务 ID，再按基准、复查的顺序传给 `compare-http`。列表从最新到最早排列，`--limit` 控制返回的匹配数量。
 
 ```powershell
 .\.venv\Scripts\python.exe -m opspilot reports --service-url http://127.0.0.1:8080/health --limit 2

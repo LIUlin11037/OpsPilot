@@ -20,6 +20,13 @@ SERVICE_URL = "http://127.0.0.1:8080/health"
 REDIS_URL = "redis://127.0.0.1:6379"
 
 
+def _compare(database: Path, command: str, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "opspilot", "--db", str(database), command, *args],
+        cwd=database.parent, capture_output=True, text=True, encoding="utf-8", timeout=20,
+    )
+
+
 @pytest.fixture
 def saved_health_pair() -> Iterator[tuple[Path, StoredReport, StoredReport]]:
     service: HealthEvidence = {
@@ -49,13 +56,7 @@ def saved_health_pair() -> Iterator[tuple[Path, StoredReport, StoredReport]]:
 def test_compare_http_distinguishes_a_skipped_dependency_from_failed_health(saved_health_pair) -> None:
     database, before, after = saved_health_pair
     original = database.read_bytes()
-    result = subprocess.run(
-        [
-            sys.executable, "-m", "opspilot", "--db", str(database), "compare-http",
-            before["task_id"], after["task_id"],
-        ],
-        cwd=database.parent, capture_output=True, text=True, encoding="utf-8", timeout=20,
-    )
+    result = _compare(database, "compare-http", before["task_id"], after["task_id"])
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
         "before_task_id": before["task_id"], "after_task_id": after["task_id"],
@@ -79,13 +80,7 @@ def test_compare_http_distinguishes_a_skipped_dependency_from_failed_health(save
 def test_compare_http_renders_markdown_with_missing_observations(saved_health_pair) -> None:
     database, before, after = saved_health_pair
     original = database.read_bytes()
-    result = subprocess.run(
-        [
-            sys.executable, "-m", "opspilot", "--db", str(database), "compare-http",
-            before["task_id"], after["task_id"], "--format", "markdown",
-        ],
-        cwd=database.parent, capture_output=True, text=True, encoding="utf-8", timeout=20,
-    )
+    result = _compare(database, "compare-http", before["task_id"], "--format", "markdown", after["task_id"])
 
     assert result.returncode == 0, result.stderr
     assert f"**Baseline task ID** {before['task_id']}" in result.stdout
@@ -99,6 +94,48 @@ def test_compare_http_renders_markdown_with_missing_observations(saved_health_pa
         r"Reason request\_timeout | No observation recorded |"
     ) in result.stdout
     assert database.read_bytes() == original
+
+
+def test_compare_http_latest_selects_reports_for_the_main_service(saved_health_pair) -> None:
+    database, before, after = saved_health_pair
+    latest = save_report(database, deepcopy(before))
+    other_report = deepcopy(before)
+    other_report["evidence"][0]["source"] = f"{SERVICE_URL}/other"
+    other_report["evidence"].append({**before["evidence"][0], "tool": "inspect_dependency_health"})
+    save_report(database, other_report)
+    original = database.read_bytes()
+
+    result = _compare(database, "compare-http-latest", "--service-url", SERVICE_URL)
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == compare_health_reports(after, latest)
+    assert database.read_bytes() == original
+
+
+def test_compare_http_latest_requires_two_matching_reports(saved_health_pair) -> None:
+    database, before, _ = saved_health_pair
+    one_report = deepcopy(before)
+    service_url = f"{SERVICE_URL}/other"
+    one_report["evidence"][0]["source"] = service_url
+    save_report(database, one_report)
+
+    result = _compare(
+        database, "compare-http-latest", "--service-url", service_url, "--format", "markdown",
+    )
+
+    assert result.returncode == 1
+    assert "fewer than two saved health reports" in result.stderr
+    assert result.stdout == ""
+
+
+def test_compare_http_latest_rejects_blank_service_url() -> None:
+    with TemporaryDirectory(prefix="opspilot-compare-latest-test-") as directory:
+        database = Path(directory) / "reports.sqlite3"
+        result = _compare(database, "compare-http-latest", "--service-url", " ")
+
+        assert result.returncode == 2
+        assert "--service-url must not be empty" in result.stderr
+        assert not database.exists()
 
 
 def test_health_comparison_markdown_describes_unchanged_observations(saved_health_pair) -> None:
