@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from functools import partial
 from operator import add
-from typing import Annotated, Literal, Protocol, TypedDict
+from typing import Annotated, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
@@ -11,15 +11,11 @@ from opspilot.core.diagnosis import (
     DiagnosisReport,
     Evidence,
     HealthEvidence,
-    HealthRead,
+    HealthTool,
     ToolCall,
     measure_tool_call,
     suggest_next_checks,
 )
-
-
-class HealthTool(Protocol):
-    def inspect_health(self) -> HealthRead: ...
 
 
 class _HealthState(TypedDict, total=False):

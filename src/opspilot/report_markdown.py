@@ -119,6 +119,8 @@ def render_markdown(report: StoredReport) -> str:
                 label = f"Service endpoint {item['source']}"
             elif tool == "inspect_dependency_health":
                 label = f"Dependency endpoint {item['source']}"
+            elif tool == "inspect_consumer_endpoint":
+                label = f"Consumer endpoint {item['source']}"
             else:
                 label = item.get("checkpoint", tool)
             lines.append(f"- **{_value(label)}** {_value(check['description'])}")

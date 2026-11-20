@@ -12,7 +12,7 @@ UnavailableOutcome = Literal["timeout", "missing"]
 ObservationOutcome = Literal["observed", UnavailableOutcome]
 ToolName = Literal[
     "inspect_queue", "inspect_consumer", "inspect_processing", "inspect_target_trace",
-    "inspect_service_health", "inspect_dependency_health",
+    "inspect_service_health", "inspect_dependency_health", "inspect_consumer_endpoint",
 ]
 ProcessingResult = Literal["succeeded", "failed"]
 ProcessingCorrelation = Literal["matched", "not_in_sample", "unknown"]
@@ -75,7 +75,7 @@ class HealthRead(HealthReadFields, total=False):
 
 
 class HealthEvidence(HealthRead):
-    tool: Literal["inspect_service_health", "inspect_dependency_health"]
+    tool: Literal["inspect_service_health", "inspect_dependency_health", "inspect_consumer_endpoint"]
 
 
 class TraceEvidenceFields(Observation):
@@ -118,6 +118,10 @@ class ToolCall(TypedDict):
 
 class QueueTool(Protocol):
     def inspect_queue(self) -> QueueEvidence | UnavailableQueueEvidence: ...
+
+
+class HealthTool(Protocol):
+    def inspect_health(self) -> HealthRead: ...
 
 
 class DiagnosticTools(QueueTool, Protocol):
@@ -183,7 +187,7 @@ _NEXT_CHECK_DESCRIPTIONS: dict[NextCheckAction, str] = {
     "verify_source": "Verify the configured source and its availability before repeating the read.",
     "verify_lookup": "Verify the lookup keys and expected scope, then inspect the matching records.",
     "inspect_endpoint_logs": "Read request and error logs for this endpoint around the observation time.",
-    "inspect_consumer_health": "Read the consumer service health and recent subscription logs.",
+    "inspect_consumer_health": "Review consumer service health and read recent subscription logs.",
     "inspect_processing_logs": "Read logs for the observed processing attempt to verify its error and message ID.",
 }
 
@@ -232,6 +236,7 @@ class DiagnosisState(DiagnosisInput, total=False):
     requested_message_id: str
     queue: QueueEvidence | UnavailableQueueEvidence
     consumer: ConsumerEvidence | UnavailableEvidence
+    consumer_health: HealthEvidence
     processing: ProcessingEvidence | UnavailableEvidence
     tool_calls: Annotated[list[ToolCall], add]
     report: DiagnosisReport
@@ -244,15 +249,11 @@ def _after_queue(state: DiagnosisState) -> Literal["inspect_consumer", "report"]
     return "report"
 
 
-def _after_queue_with_processing(
-    state: DiagnosisState,
-) -> Literal["inspect_processing", "report"]:
+def _has_queue_activity(state: DiagnosisState) -> bool:
     queue = state["queue"]
     if queue["outcome"] == "observed" and queue["pending_messages"] > 0:
-        return "inspect_processing"
-    if queue["outcome"] != "timeout" and (queue.get("unacknowledged_messages") or 0) > 0:
-        return "inspect_processing"
-    return "report"
+        return True
+    return queue["outcome"] != "timeout" and (queue.get("unacknowledged_messages") or 0) > 0
 
 
 def _after_consumer(state: DiagnosisState) -> Literal["inspect_processing", "report"]:
@@ -348,6 +349,9 @@ def _conclude_without_consumer(
     state: DiagnosisState, correlation: ProcessingCorrelation | None
 ) -> tuple[DiagnosisStatus, str]:
     status, conclusion = _conclude_queue_snapshot(state["queue"])
+    health = state.get("consumer_health")
+    if health is not None:
+        conclusion += f" Consumer endpoint health is {health['health']}."
 
     processing = state.get("processing")
     if processing is not None:
@@ -405,6 +409,8 @@ def _write_report(state: DiagnosisState) -> dict[str, DiagnosisReport]:
     consumer = state.get("consumer")
     if consumer is not None:
         report["evidence"].append(consumer)
+    if "consumer_health" in state:
+        report["evidence"].append(state["consumer_health"])
     if processing is not None:
         report["evidence"].append(processing)
     report["next_checks"] = suggest_next_checks(report["evidence"])
@@ -421,7 +427,7 @@ def measure_tool_call(tool: Callable[[], ToolResult]) -> tuple[ToolResult, float
 
 
 def _inspect(
-    state_field: Literal["queue", "consumer", "processing"],
+    state_field: Literal["queue", "consumer", "consumer_health", "processing"],
     tool: Callable[[], Evidence],
     _state: DiagnosisState,
 ) -> dict[str, Evidence | list[ToolCall]]:
@@ -432,6 +438,10 @@ def _inspect(
         "duration_ms": duration_ms,
     }
     return {state_field: evidence, "tool_calls": [call]}
+
+
+def _read_consumer_health(tool: HealthTool) -> HealthEvidence:
+    return {**tool.inspect_health(), "tool": "inspect_consumer_endpoint"}
 
 
 def _queue_graph(tool: QueueTool) -> StateGraph:
@@ -458,23 +468,38 @@ def run_queue_diagnosis(
     processing_tool: TargetProcessingTool | None = None,
     *,
     message_id: str | None = None,
+    consumer_health_tool: HealthTool | None = None,
 ) -> DiagnosisReport:
     if message_id is not None and (not message_id.strip() or processing_tool is None):
         raise ValueError("A nonempty message ID requires a configured processing source.")
 
     graph = _queue_graph(tool)
     state: DiagnosisState = {"question": question}
-    if processing_tool is None:
-        graph.add_edge("inspect_queue", "report")
-    elif message_id is None:
-        _add_processing_node(graph, processing_tool.inspect_processing)
-        graph.add_conditional_edges("inspect_queue", _after_queue_with_processing)
-    else:
-        state["requested_message_id"] = message_id
-        _add_processing_node(
-            graph, partial(processing_tool.inspect_processing, message_id=message_id)
+    processing_step = "report"
+    if processing_tool is not None:
+        inspect_processing = processing_tool.inspect_processing
+        if message_id is not None:
+            state["requested_message_id"] = message_id
+            inspect_processing = partial(inspect_processing, message_id=message_id)
+        _add_processing_node(graph, inspect_processing)
+        processing_step = "inspect_processing"
+
+    active_step = processing_step
+    if consumer_health_tool is not None:
+        graph.add_node(
+            "inspect_consumer_endpoint",
+            partial(_inspect, "consumer_health", partial(_read_consumer_health, consumer_health_tool)),
         )
-        graph.add_edge("inspect_queue", "inspect_processing")
+        graph.add_edge("inspect_consumer_endpoint", processing_step)
+        active_step = "inspect_consumer_endpoint"
+
+    inactive_step = processing_step if message_id is not None else "report"
+    if active_step == inactive_step:
+        graph.add_edge("inspect_queue", active_step)
+    else:
+        graph.add_conditional_edges(
+            "inspect_queue", _has_queue_activity, {True: active_step, False: inactive_step},
+        )
     return graph.compile().invoke(state)["report"]
 
 

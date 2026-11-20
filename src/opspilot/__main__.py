@@ -17,8 +17,8 @@ from opspilot.connectors.mysql import MySQLConnector, MySQLHealthConnector
 from opspilot.connectors.rabbitmq import RabbitMQQueueConnector
 from opspilot.connectors.redis_health import RedisHealthConnector
 from opspilot.connectors.simulated import SimulatedQueueConnector
-from opspilot.core.diagnosis import TargetProcessingTool, run_diagnosis, run_queue_diagnosis
-from opspilot.core.health_diagnosis import HealthTool, run_health_diagnosis
+from opspilot.core.diagnosis import HealthTool, TargetProcessingTool, run_diagnosis, run_queue_diagnosis
+from opspilot.core.health_diagnosis import run_health_diagnosis
 from opspilot.core.startup import run_startup
 from opspilot.core.target_trace import run_target_trace
 from opspilot.health_config import DEFAULT_HEALTH_TIMEOUT_SECONDS, HealthConfig, load_health_config
@@ -210,6 +210,7 @@ def main() -> None:
     processing_source.add_argument(
         "--processing-url", help="Read processing records from an HTTP target endpoint."
     )
+    diagnose.add_argument("--consumer-health-url", help="Read consumer endpoint health on queue activity.")
     diagnose.add_argument("--message-id", help="Look up processing records for an exact ID.")
     diagnose.add_argument("question", help="Incident description.")
     health = commands.add_parser("diagnose-http", help="Diagnose a service through its health endpoint.")
@@ -409,14 +410,21 @@ def main() -> None:
                 queue_tool = _rabbitmq_connector(args, diagnose)
                 try:
                     processing_tool = _target_processing_tool(args, queue_tool)
+                    consumer_health_tool = (
+                        HttpHealthConnector(args.consumer_health_url, queue_tool.timeout_seconds)
+                        if args.consumer_health_url is not None else None
+                    )
                     report = run_queue_diagnosis(
-                        question, queue_tool, processing_tool, message_id=args.message_id
+                        question, queue_tool, processing_tool, message_id=args.message_id,
+                        consumer_health_tool=consumer_health_tool,
                     )
                 except ValueError as error:
                     diagnose.error(str(error))
             else:
                 if has_processing_source:
                     diagnose.error("--processing-record and --processing-url require --management-url")
+                if args.consumer_health_url is not None:
+                    diagnose.error("--consumer-health-url requires --management-url")
                 if any(value is not None for value in (args.queue, args.vhost, args.timeout)):
                     diagnose.error("--queue, --vhost, and --timeout require --management-url")
                 simulated_queue, adapter = scenarios[args.scenario]

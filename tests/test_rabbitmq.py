@@ -365,6 +365,77 @@ def test_rabbitmq_diagnosis_reads_record_only_for_observed_queue_activity(
 
 
 @pytest.mark.parametrize(
+    ("pending", "unacknowledged", "broker_status", "targeted", "health"),
+    [
+        (3, 0, 200, False, "unhealthy"),
+        (None, 3, 200, True, "unknown"),
+        (0, 0, 200, True, None),
+        (0, 3, 403, False, None),
+    ],
+)
+def test_rabbitmq_diagnosis_checks_configured_consumer_on_queue_activity(
+    processing_service, pending, unacknowledged, broker_status, targeted, health,
+) -> None:
+    metrics = json.dumps({
+        "messages_ready": pending, "messages_unacknowledged": unacknowledged, "consumers": 1,
+    }).encode()
+    record = json.dumps({
+        "queue": "orders", "vhost": "/", "message_id": "msg-101",
+        "result": "succeeded", "attempted_at": "2026-11-19T03:00:00Z",
+    }).encode()
+    health_status = 503 if health == "unhealthy" else 403
+
+    def respond(path):
+        if path == "/health":
+            return health_status, b""
+        assert path.startswith("/processing?")
+        return 200, record
+
+    with (
+        TemporaryDirectory(prefix="opspilot-consumer-health-") as directory,
+        _management_api(metrics, status=broker_status) as (management_url, queue_requests),
+        processing_service(respond) as (processing_url, consumer_requests),
+    ):
+        health_url = processing_url.removesuffix("/processing") + "/health"
+        options = [
+            "diagnose", "--management-url", management_url, "--queue", "orders",
+            "--consumer-health-url", health_url,
+        ]
+        if targeted:
+            options.extend(("--processing-url", processing_url, "--message-id", "msg-101"))
+        result = _cli(*options, "Check queue and consumer", cwd=directory)
+
+    assert result.returncode == 0, result.stderr
+    assert len(queue_requests) == 1
+    report = json.loads(result.stdout)
+    assert report["status"] == (
+        "no_backlog_observed" if pending == 0 and broker_status == 200 else "undetermined"
+    )
+    expected_tools = ["inspect_queue"]
+    if health is not None:
+        expected_tools.append("inspect_consumer_endpoint")
+        endpoint = report["evidence"][1]
+        assert endpoint["source"] == health_url
+        assert endpoint["http_status"] == health_status
+        assert endpoint["health"] == health
+        assert f"Consumer endpoint health is {health}." in report["conclusion"]
+        action = "inspect_endpoint_logs" if health == "unhealthy" else "verify_read_access"
+        assert any(
+            check["evidence_index"] == 1 and check["action"] == action
+            for check in report["next_checks"]
+        )
+    if targeted:
+        expected_tools.append("inspect_processing")
+        assert report["evidence"][-1]["message_id"] == "msg-101"
+    assert [item["tool"] for item in report["evidence"]] == expected_tools
+    assert [call["tool"] for call in report["tool_calls"]] == expected_tools
+    expected_paths = ["/health"] if health is not None else []
+    if targeted:
+        expected_paths.append("/processing")
+    assert [path.split("?", 1)[0] for path in consumer_requests] == expected_paths
+
+
+@pytest.mark.parametrize(
     ("http_status", "message_id", "status"),
     [
         (200, "msg-101", "no_backlog_observed"),

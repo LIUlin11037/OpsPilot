@@ -152,6 +152,14 @@ JSON 报告包含任务 ID、用户提交的问题、诊断状态和结论。每
 
 RabbitMQ 模式保留队列证据及读取耗时。报告分别描述待投递数和已投递待确认数。待投递数为零时，`no_backlog_observed` 仅表示当次未观测到等待投递的消息，报告仍会列出待确认数。发现待投递积压时，报告也会说明消费者注册数，根因标为 `undetermined`。
 
+### 查看消费者端点健康
+
+已知消费者的 HTTP 健康端点时，可在 RabbitMQ 模式加上 `--consumer-health-url`。观察到待投递或待确认消息时，OpsPilot 发送只读 GET，记录端点健康状态、观测时间和耗时。待投递数缺失时，已观测到的待确认消息也能触发检查。健康状态说明该端点当时的响应，积压原因仍需结合队列和业务证据核查。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot diagnose --management-url http://127.0.0.1:15672 --queue "orders" --consumer-health-url http://127.0.0.1:8081/health "队列有积压，消费者端点能响应吗？"
+```
+
 ### 结合业务处理记录
 
 目标系统可以用 UTF-8 JSON 导出单条处理记录，也可以将多条相同结构的记录放在一个 JSON 数组中。将下例保存为 `processing.json`，并用实际的队列、消息 ID、结果和时间替换示例值。`result` 支持 `succeeded` 和 `failed`，`attempted_at` 使用带时区的 ISO 8601 时间。
