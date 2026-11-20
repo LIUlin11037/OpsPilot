@@ -131,14 +131,21 @@ def _require_report(database: Path, task_id: str, parser: argparse.ArgumentParse
     return report
 
 
-def _latest_health_task_ids(
-    database: Path, service_url: str, parser: argparse.ArgumentParser
+def _latest_comparison_task_ids(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
 ) -> tuple[str, str]:
-    if not service_url.strip():
-        parser.error("--service-url must not be empty")
-    reports = list_reports(database, limit=2, service_url=service_url)
+    if args.command == "compare-http-latest":
+        if not args.service_url.strip():
+            parser.error("--service-url must not be empty")
+        reports = list_reports(args.db, limit=2, service_url=args.service_url)
+        scope = "health reports for the requested service URL"
+    else:
+        if not args.queue_source.strip():
+            parser.error("--queue-source must not be empty")
+        reports = list_reports(args.db, limit=2, queue_source=args.queue_source)
+        scope = "queue reports for the requested queue source"
     if len(reports) < 2:
-        parser.exit(1, "opspilot: fewer than two saved health reports for the requested service URL\n")
+        parser.exit(1, f"opspilot: fewer than two saved {scope}\n")
     follow_up, baseline = reports
     return baseline["task_id"], follow_up["task_id"]
 
@@ -261,6 +268,7 @@ def main() -> None:
     reports_command.add_argument("--delivery-id", type=int, help="Match a HireHub delivery ID.")
     reports_command.add_argument("--environment", help="Match a HireHub environment label.")
     reports_command.add_argument("--service-url", help="Match the exact main service health URL.")
+    reports_command.add_argument("--queue-source", help="Match the exact queue evidence source.")
     report_comparisons = {
         "compare-hirehub": commands.add_parser(
             "compare-hirehub", help="Compare saved reports for one HireHub event."
@@ -274,22 +282,30 @@ def main() -> None:
         "compare-queue": commands.add_parser(
             "compare-queue", help="Compare queue observations in two saved diagnosis reports."
         ),
+        "compare-queue-latest": commands.add_parser(
+            "compare-queue-latest", help="Compare the two most recently saved reports for one queue."
+        ),
     }
     for command in ("compare-hirehub", "compare-http", "compare-queue"):
         comparison_parser = report_comparisons[command]
         comparison_parser.add_argument("before_task_id", help="Task ID of the baseline report.")
         comparison_parser.add_argument("after_task_id", help="Task ID of the follow-up report.")
-    for command in ("compare-http", "compare-http-latest", "compare-queue"):
+    queue_comparisons = ("compare-queue", "compare-queue-latest")
+    for command in ("compare-http", "compare-http-latest", *queue_comparisons):
         report_comparisons[command].add_argument(
             "--format", choices=("json", "markdown"), default="json"
         )
     report_comparisons["compare-http-latest"].add_argument(
         "--service-url", required=True, help="Match the exact main service health URL."
     )
-    report_comparisons["compare-queue"].add_argument(
-        "--include-consumer-health", action="store_true",
-        help="Include changes in saved consumer endpoint observations.",
+    report_comparisons["compare-queue-latest"].add_argument(
+        "--queue-source", required=True, help="Match the exact queue evidence source."
     )
+    for command in queue_comparisons:
+        report_comparisons[command].add_argument(
+            "--include-consumer-health", action="store_true",
+            help="Include changes in saved consumer endpoint observations.",
+        )
     inspect_queue = commands.add_parser(
         "inspect-queue", help="Read queue metrics from RabbitMQ Management."
     )
@@ -333,16 +349,18 @@ def main() -> None:
                 reports_command.error("--environment must not be empty")
             if args.service_url is not None and not args.service_url.strip():
                 reports_command.error("--service-url must not be empty")
+            if args.queue_source is not None and not args.queue_source.strip():
+                reports_command.error("--queue-source must not be empty")
             summaries = list_reports(
                 args.db, limit=args.limit, delivery_id=args.delivery_id, environment=environment,
-                service_url=args.service_url,
+                service_url=args.service_url, queue_source=args.queue_source,
             )
             print(json.dumps(summaries, indent=2))
             return
         if args.command in report_comparisons:
             comparison_parser = report_comparisons[args.command]
-            if args.command == "compare-http-latest":
-                before_id, after_id = _latest_health_task_ids(args.db, args.service_url, comparison_parser)
+            if args.command in ("compare-http-latest", "compare-queue-latest"):
+                before_id, after_id = _latest_comparison_task_ids(args, comparison_parser)
             else:
                 before_id, after_id = args.before_task_id, args.after_task_id
             before = _require_report(args.db, before_id, parser)
@@ -351,7 +369,7 @@ def main() -> None:
             try:
                 if args.command == "compare-hirehub":
                     comparison = compare_trace_reports(before, after)
-                elif args.command == "compare-queue":
+                elif args.command in queue_comparisons:
                     comparison = compare_queue_reports(
                         before, after, include_consumer_health=args.include_consumer_health,
                     )

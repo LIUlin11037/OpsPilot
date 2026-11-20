@@ -154,6 +154,14 @@ RabbitMQ 模式保留队列证据及读取耗时。报告分别描述待投递�
 
 ### 对比队列复查报告
 
+已有同一队列的多份报告时，可以按报告中队列证据的 `source` 查找历史，或直接对比最近保存的两份。列表从最新到最早排列，对比以较早的一份为基准。
+
+```powershell
+$queueSource = "http://127.0.0.1:15672/api/queues/%2F/orders"
+.\.venv\Scripts\python.exe -m opspilot reports --queue-source $queueSource --limit 2
+.\.venv\Scripts\python.exe -m opspilot compare-queue-latest --queue-source $queueSource --include-consumer-health --format markdown
+```
+
 将同一队列的两份诊断报告按基准、复查的顺序传给 `compare-queue`。命令读取同一 SQLite 数据库，要求两份报告的队列来源完全一致，包括 RabbitMQ 管理地址、虚拟主机和队列名。
 
 ```powershell

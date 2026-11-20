@@ -178,6 +178,45 @@ def test_compare_queue_requires_the_same_queue_source(saved_queue_pair, saved_he
         compare_queue_reports(before, health_report)
 
 
+def test_compare_queue_latest_selects_two_matches_in_save_order(saved_queue_pair) -> None:
+    database, first, second = saved_queue_pair
+    latest = save_report(database, {**first, "question": "Latest queue check"})
+    foreign = deepcopy(first)
+    foreign["evidence"][0]["source"] = QUEUE_SOURCE.replace("%2F", "other-vhost")
+    foreign["evidence"][1]["source"] = QUEUE_SOURCE
+    save_report(database, foreign)
+    original = database.read_bytes()
+
+    summaries = list_reports(database, limit=2, queue_source=QUEUE_SOURCE)
+    assert [(row["task_id"], row["queue_source"]) for row in summaries] == [
+        (latest["task_id"], QUEUE_SOURCE), (second["task_id"], QUEUE_SOURCE),
+    ]
+
+    result = _compare(
+        database, "compare-queue-latest", "--queue-source", QUEUE_SOURCE, "--include-consumer-health",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == compare_queue_reports(
+        second, latest, include_consumer_health=True,
+    )
+    assert database.read_bytes() == original
+
+
+def test_compare_queue_latest_requires_two_reports_for_the_selected_queue(saved_queue_pair) -> None:
+    database, first, _ = saved_queue_pair
+    one_report = deepcopy(first)
+    source = QUEUE_SOURCE + "-other"
+    one_report["evidence"][0]["source"] = source
+    save_report(database, one_report)
+
+    result = _compare(database, "compare-queue-latest", "--queue-source", source)
+
+    assert result.returncode == 1
+    assert "fewer than two saved queue reports" in result.stderr
+    assert result.stdout == ""
+
+
 @pytest.fixture
 def saved_health_pair() -> Iterator[tuple[Path, StoredReport, StoredReport]]:
     service: HealthEvidence = {

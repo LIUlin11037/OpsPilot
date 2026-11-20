@@ -23,6 +23,7 @@ class ReportSummaryFields(TypedDict):
 class ReportSummary(ReportSummaryFields, total=False):
     target_trace: TargetTraceSummary
     service_url: str
+    queue_source: str
 
 
 def _open_read_only(database: Path) -> sqlite3.Connection:
@@ -64,19 +65,20 @@ def load_report(database: Path, task_id: str) -> StoredReport | None:
 
 def list_reports(
     database: Path, *, limit: int, delivery_id: int | None = None,
-    environment: str | None = None, service_url: str | None = None,
+    environment: str | None = None, service_url: str | None = None, queue_source: str | None = None,
 ) -> list[ReportSummary]:
     if not database.exists():
         return []
 
     filter_trace = delivery_id is not None or environment is not None
+    has_filters = filter_trace or service_url is not None or queue_source is not None
     summaries: list[ReportSummary] = []
     with closing(_open_read_only(database)) as connection:
         # The original report table has a rowid and no save timestamp.
         # Filters apply to stored payloads, so the limit counts matching reports.
         rows = connection.execute(
             "SELECT task_id, payload FROM reports ORDER BY rowid DESC LIMIT ?",
-            (-1 if filter_trace or service_url is not None else limit,),
+            (-1 if has_filters else limit,),
         )
         for task_id, payload in rows:
             report: DiagnosisReport = json.loads(payload)
@@ -99,6 +101,13 @@ def list_reports(
                 ):
                     continue
                 summary["service_url"] = service_url
+            if queue_source is not None:
+                if not any(
+                    check["tool"] == "inspect_queue" and check["source"] == queue_source
+                    for check in report["evidence"]
+                ):
+                    continue
+                summary["queue_source"] = queue_source
             summaries.append(summary)
             if len(summaries) == limit:
                 break

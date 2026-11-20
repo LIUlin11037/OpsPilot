@@ -325,6 +325,7 @@ def test_reports_rejects_invalid_limits(cli_directory: Path, limit: str) -> None
         ("--delivery-id", "0", "--delivery-id must be positive"),
         ("--environment", "   ", "--environment must not be empty"),
         ("--service-url", "   ", "--service-url must not be empty"),
+        ("--queue-source", "   ", "--queue-source must not be empty"),
     ]
 )
 def test_reports_rejects_invalid_filters(
