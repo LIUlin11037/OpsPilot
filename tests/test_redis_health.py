@@ -90,6 +90,61 @@ def test_redis_dependency_timeout_is_unavailable() -> None:
     assert evidence["reason"] == "request_timeout"
 
 
+@pytest.mark.parametrize("service_status", [204, 503])
+def test_http_diagnosis_can_read_multiple_mixed_dependencies(
+    processing_service, service_status: int
+) -> None:
+    statuses = {"/service/health": service_status, "/denied/health": 403, "/healthy/health": 204}
+    with TemporaryDirectory(prefix="opspilot-mixed-health-test-") as directory:
+        with (
+            processing_service(lambda path: (statuses[path], b"")) as (endpoint, http_requests),
+            _redis_response(b"-NOAUTH authentication required\r\n") as (redis_denied, denied_requests),
+            _redis_response(b"+PONG\r\n") as (redis_healthy, healthy_requests),
+        ):
+            origin = endpoint.rsplit("/", 1)[0]
+            service_url = f"{origin}/service/health"
+            denied_url = f"{origin}/denied/health"
+            healthy_url = f"{origin}/healthy/health"
+            result = subprocess.run(
+                [
+                    sys.executable, "-m", "opspilot", "diagnose-http", "--service-url", service_url,
+                    "--redis-dependency-url", redis_denied, "--dependency-url", denied_url,
+                    "--dependency-url", healthy_url, "--redis-dependency-url", redis_healthy,
+                    "Check service and dependencies",
+                ],
+                cwd=directory, capture_output=True, text=True, encoding="utf-8", timeout=20,
+            )
+        assert result.returncode == 0, result.stderr
+        report = json.loads(result.stdout)
+        saved = subprocess.run(
+            [sys.executable, "-m", "opspilot", "report", report["task_id"]],
+            cwd=directory, capture_output=True, text=True, encoding="utf-8", timeout=20,
+        )
+        assert saved.returncode == 0 and json.loads(saved.stdout) == report
+
+    if service_status == 204:
+        assert http_requests == ["/service/health"]
+        assert not denied_requests and not healthy_requests
+        assert [item["source"] for item in report["evidence"]] == [service_url]
+        assert len(report["tool_calls"]) == 1
+        return
+
+    assert report["status"] == "undetermined"
+    assert http_requests == ["/service/health", "/denied/health", "/healthy/health"]
+    assert denied_requests == healthy_requests == [PING_FRAME]
+    assert [(item["source"], item["health"]) for item in report["evidence"]] == [
+        (service_url, "unhealthy"), (denied_url, "unknown"), (healthy_url, "healthy"),
+        (redis_denied, "unknown"), (redis_healthy, "healthy"),
+    ]
+    assert [
+        (call["tool"], call["outcome"]) for call in report["tool_calls"]
+    ] == [
+        (item["tool"], item["outcome"]) for item in report["evidence"]
+    ]
+    assert [check["evidence_index"] for check in report["next_checks"]] == [1, 3]
+    assert all(url in report["conclusion"] for url in (denied_url, healthy_url, redis_denied, redis_healthy))
+
+
 def test_redis_dependency_rejects_credentials_in_url() -> None:
     with pytest.raises(ValueError, match="redis://HOST"):
         RedisHealthConnector("redis://reader:secret@127.0.0.1:6379")

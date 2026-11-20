@@ -31,6 +31,8 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m opspilot diagnose-http --service-url http://127.0.0.1:8080/health --redis-dependency-url redis://127.0.0.1:6379 "服务健康检查失败，Redis 能响应吗？"
 ```
 
+`--dependency-url` 和 `--redis-dependency-url` 可以同时使用，也可以分别重复传入。主服务异常时先检查 HTTP 依赖，再检查 Redis，组内按传入顺序执行。每个端点分别使用 `--timeout`，报告按调用顺序保存各自的来源、结果和耗时。
+
 ## 模拟诊断
 
 ```powershell

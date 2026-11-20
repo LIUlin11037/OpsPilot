@@ -180,9 +180,12 @@ def main() -> None:
     diagnose.add_argument("question", help="Incident description.")
     health = commands.add_parser("diagnose-http", help="Diagnose a service through its health endpoint.")
     health.add_argument("--service-url", required=True, help="Service health URL.")
-    dependency_source = health.add_mutually_exclusive_group()
-    dependency_source.add_argument("--dependency-url", help="Optional HTTP dependency health URL.")
-    dependency_source.add_argument("--redis-dependency-url", help="Optional Redis dependency URL.")
+    health.add_argument(
+        "--dependency-url", action="append", default=[], help="HTTP dependency health URL. Repeatable."
+    )
+    health.add_argument(
+        "--redis-dependency-url", action="append", default=[], help="Redis dependency URL. Repeatable."
+    )
     health.add_argument(
         "--timeout", type=float, default=5.0, metavar="SECONDS", help="Socket timeout (default: 5)."
     )
@@ -275,12 +278,13 @@ def main() -> None:
                 health.error("question must not be empty")
             try:
                 service = HttpHealthConnector(args.service_url, args.timeout)
-                dependency: HealthTool | None = None
-                if args.dependency_url is not None:
-                    dependency = HttpHealthConnector(args.dependency_url, args.timeout)
-                elif args.redis_dependency_url is not None:
-                    dependency = RedisHealthConnector(args.redis_dependency_url, args.timeout)
-                report = run_health_diagnosis(question, service, dependency)
+                dependencies: list[HealthTool] = [
+                    HttpHealthConnector(url, args.timeout) for url in args.dependency_url
+                ]
+                dependencies.extend(
+                    RedisHealthConnector(url, args.timeout) for url in args.redis_dependency_url
+                )
+                report = run_health_diagnosis(question, service, dependencies)
             except ValueError as error:
                 health.error(str(error))
             stored_report = save_report(args.db, report)
