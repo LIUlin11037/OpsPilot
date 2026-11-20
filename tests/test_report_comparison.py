@@ -100,6 +100,42 @@ def test_compare_http_rejects_different_service_or_report_kind(saved_health_pair
         compare_health_reports(before, after)
 
 
+def test_reports_filters_by_main_service_before_applying_limit(saved_health_pair) -> None:
+    database, before, after = saved_health_pair
+    other_service: HealthEvidence = {
+        **before["evidence"][0], "source": "http://127.0.0.1:8081/health",
+    }
+    shared_dependency: HealthEvidence = {
+        **before["evidence"][0], "tool": "inspect_dependency_health",
+    }
+    other_report: DiagnosisReport = {
+        "question": "Check another service", "status": "undetermined",
+        "conclusion": "Service unavailable", "processing_correlation": None,
+        "evidence": [other_service, shared_dependency],
+    }
+    save_report(database, other_report)
+    original = database.read_bytes()
+
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "opspilot", "--db", str(database), "reports",
+            "--service-url", SERVICE_URL, "--limit", "2",
+        ],
+        cwd=database.parent, capture_output=True, text=True, encoding="utf-8", timeout=20,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == [
+        {
+            "task_id": report["task_id"], "question": report["question"],
+            "status": report["status"], "service_url": SERVICE_URL,
+        }
+        for report in (after, before)
+    ]
+    assert list_reports(database, limit=2, service_url=SERVICE_URL + "/other") == []
+    assert database.read_bytes() == original
+
+
 @pytest.fixture
 def saved_pair() -> Iterator[tuple[Path, StoredReport, StoredReport]]:
     with TemporaryDirectory(prefix="opspilot-comparison-test-") as directory:

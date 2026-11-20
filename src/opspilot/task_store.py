@@ -22,6 +22,7 @@ class ReportSummaryFields(TypedDict):
 
 class ReportSummary(ReportSummaryFields, total=False):
     target_trace: TargetTraceSummary
+    service_url: str
 
 
 def _open_read_only(database: Path) -> sqlite3.Connection:
@@ -62,7 +63,8 @@ def load_report(database: Path, task_id: str) -> StoredReport | None:
 
 
 def list_reports(
-    database: Path, *, limit: int, delivery_id: int | None = None, environment: str | None = None
+    database: Path, *, limit: int, delivery_id: int | None = None,
+    environment: str | None = None, service_url: str | None = None,
 ) -> list[ReportSummary]:
     if not database.exists():
         return []
@@ -71,10 +73,10 @@ def list_reports(
     summaries: list[ReportSummary] = []
     with closing(_open_read_only(database)) as connection:
         # The original report table has a rowid and no save timestamp.
-        # Trace filters apply to stored payloads, so the limit counts matching reports.
+        # Filters apply to stored payloads, so the limit counts matching reports.
         rows = connection.execute(
             "SELECT task_id, payload FROM reports ORDER BY rowid DESC LIMIT ?",
-            (-1 if filter_trace else limit,),
+            (-1 if filter_trace or service_url is not None else limit,),
         )
         for task_id, payload in rows:
             report: DiagnosisReport = json.loads(payload)
@@ -90,6 +92,13 @@ def list_reports(
                 ):
                     continue
                 summary["target_trace"] = trace
+            if service_url is not None:
+                if not any(
+                    check["tool"] == "inspect_service_health" and check["source"] == service_url
+                    for check in report["evidence"]
+                ):
+                    continue
+                summary["service_url"] = service_url
             summaries.append(summary)
             if len(summaries) == limit:
                 break

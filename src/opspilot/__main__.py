@@ -243,6 +243,7 @@ def main() -> None:
     reports_command.add_argument("--limit", type=int, default=20, help="Maximum reports (default: 20).")
     reports_command.add_argument("--delivery-id", type=int, help="Match a HireHub delivery ID.")
     reports_command.add_argument("--environment", help="Match a HireHub environment label.")
+    reports_command.add_argument("--service-url", help="Match the exact main service health URL.")
     report_comparisons = {
         "compare-hirehub": (
             commands.add_parser("compare-hirehub", help="Compare saved reports for one HireHub event."),
@@ -297,8 +298,11 @@ def main() -> None:
             environment = args.environment
             if environment is not None and not environment.strip():
                 reports_command.error("--environment must not be empty")
+            if args.service_url is not None and not args.service_url.strip():
+                reports_command.error("--service-url must not be empty")
             summaries = list_reports(
-                args.db, limit=args.limit, delivery_id=args.delivery_id, environment=environment
+                args.db, limit=args.limit, delivery_id=args.delivery_id, environment=environment,
+                service_url=args.service_url,
             )
             print(json.dumps(summaries, indent=2))
             return

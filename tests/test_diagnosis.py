@@ -324,9 +324,10 @@ def test_reports_rejects_invalid_limits(cli_directory: Path, limit: str) -> None
     ("flag", "value", "error"), [
         ("--delivery-id", "0", "--delivery-id must be positive"),
         ("--environment", "   ", "--environment must not be empty"),
+        ("--service-url", "   ", "--service-url must not be empty"),
     ]
 )
-def test_reports_rejects_invalid_trace_filters(
+def test_reports_rejects_invalid_filters(
     cli_directory: Path, flag: str, value: str, error: str
 ) -> None:
     result = _run_cli(cli_directory, "reports", flag, value, check=False)
