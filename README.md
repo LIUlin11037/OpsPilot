@@ -33,6 +33,23 @@ python -m venv .venv
 
 `--dependency-url` 和 `--redis-dependency-url` 可以同时使用，也可以分别重复传入。主服务异常时先检查 HTTP 依赖，再检查 Redis，组内按传入顺序执行。每个端点分别使用 `--timeout`，报告按调用顺序保存各自的来源、结果和耗时。
 
+### 复用本地配置
+
+将端点和超时保存到 UTF-8 JSON 文件，例如 `health.json`。`service_url` 必填，两个依赖数组默认为空，`timeout_seconds` 默认为 5。使用 `--config` 时，服务、依赖和超时均从文件读取。
+
+```json
+{
+  "service_url": "http://127.0.0.1:8080/health",
+  "dependency_urls": ["http://127.0.0.1:8081/health"],
+  "redis_dependency_urls": ["redis://127.0.0.1:6379"],
+  "timeout_seconds": 2
+}
+```
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot diagnose-http --config .\health.json "复查服务和依赖"
+```
+
 ## 模拟诊断
 
 ```powershell

@@ -21,6 +21,7 @@ from opspilot.core.diagnosis import TargetProcessingTool, run_diagnosis, run_que
 from opspilot.core.health_diagnosis import HealthTool, run_health_diagnosis
 from opspilot.core.startup import run_startup
 from opspilot.core.target_trace import run_target_trace
+from opspilot.health_config import DEFAULT_HEALTH_TIMEOUT_SECONDS, HealthConfig, load_health_config
 from opspilot.report_comparison import compare_trace_reports
 from opspilot.report_markdown import render_markdown
 from opspilot.task_store import StoredReport, list_reports, load_report, save_report
@@ -122,6 +123,19 @@ def _require_report(database: Path, task_id: str, parser: argparse.ArgumentParse
     return report
 
 
+def _health_config(args: argparse.Namespace) -> HealthConfig:
+    if args.config is not None:
+        if args.dependency_url or args.redis_dependency_url or args.timeout is not None:
+            raise ValueError("--config takes dependency URLs and timeout from the configuration file.")
+        return load_health_config(args.config)
+    return HealthConfig(
+        service_url=args.service_url,
+        dependency_urls=tuple(args.dependency_url),
+        redis_dependency_urls=tuple(args.redis_dependency_url),
+        timeout_seconds=DEFAULT_HEALTH_TIMEOUT_SECONDS if args.timeout is None else args.timeout,
+    )
+
+
 def main() -> None:
     no_processing_data = SimulatedProcessingAdapter()
     running_backlog = SimulatedQueueConnector(
@@ -179,7 +193,9 @@ def main() -> None:
     diagnose.add_argument("--message-id", help="Look up processing records for an exact ID.")
     diagnose.add_argument("question", help="Incident description.")
     health = commands.add_parser("diagnose-http", help="Diagnose a service through its health endpoint.")
-    health.add_argument("--service-url", required=True, help="Service health URL.")
+    health_source = health.add_mutually_exclusive_group(required=True)
+    health_source.add_argument("--service-url", help="Service health URL.")
+    health_source.add_argument("--config", type=Path, help="JSON file with health endpoints and timeout.")
     health.add_argument(
         "--dependency-url", action="append", default=[], help="HTTP dependency health URL. Repeatable."
     )
@@ -187,7 +203,7 @@ def main() -> None:
         "--redis-dependency-url", action="append", default=[], help="Redis dependency URL. Repeatable."
     )
     health.add_argument(
-        "--timeout", type=float, default=5.0, metavar="SECONDS", help="Socket timeout (default: 5)."
+        "--timeout", type=float, metavar="SECONDS", help="Socket timeout (default: 5)."
     )
     health.add_argument("question", help="Incident description.")
     hirehub = commands.add_parser(
@@ -277,12 +293,14 @@ def main() -> None:
             if not question:
                 health.error("question must not be empty")
             try:
-                service = HttpHealthConnector(args.service_url, args.timeout)
+                config = _health_config(args)
+                service = HttpHealthConnector(config.service_url, config.timeout_seconds)
                 dependencies: list[HealthTool] = [
-                    HttpHealthConnector(url, args.timeout) for url in args.dependency_url
+                    HttpHealthConnector(url, config.timeout_seconds) for url in config.dependency_urls
                 ]
                 dependencies.extend(
-                    RedisHealthConnector(url, args.timeout) for url in args.redis_dependency_url
+                    RedisHealthConnector(url, config.timeout_seconds)
+                    for url in config.redis_dependency_urls
                 )
                 report = run_health_diagnosis(question, service, dependencies)
             except ValueError as error:

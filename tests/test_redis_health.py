@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 from contextlib import contextmanager
+from pathlib import Path
 from socketserver import StreamRequestHandler, ThreadingTCPServer
 from tempfile import TemporaryDirectory
 from threading import Thread
@@ -90,9 +91,11 @@ def test_redis_dependency_timeout_is_unavailable() -> None:
     assert evidence["reason"] == "request_timeout"
 
 
-@pytest.mark.parametrize("service_status", [204, 503])
+@pytest.mark.parametrize(
+    ("service_status", "from_config"), [(204, False), (503, False), (503, True)]
+)
 def test_http_diagnosis_can_read_multiple_mixed_dependencies(
-    processing_service, service_status: int
+    processing_service, service_status: int, from_config: bool
 ) -> None:
     statuses = {"/service/health": service_status, "/denied/health": 403, "/healthy/health": 204}
     with TemporaryDirectory(prefix="opspilot-mixed-health-test-") as directory:
@@ -105,12 +108,25 @@ def test_http_diagnosis_can_read_multiple_mixed_dependencies(
             service_url = f"{origin}/service/health"
             denied_url = f"{origin}/denied/health"
             healthy_url = f"{origin}/healthy/health"
+            if from_config:
+                config = Path(directory) / "health configuration.json"
+                config.write_text(json.dumps({
+                    "service_url": service_url,
+                    "dependency_urls": [denied_url, healthy_url],
+                    "redis_dependency_urls": [redis_denied, redis_healthy],
+                    "timeout_seconds": 2,
+                }), encoding="utf-8-sig")
+                options = ["--config", str(config)]
+            else:
+                options = [
+                    "--service-url", service_url, "--redis-dependency-url", redis_denied,
+                    "--dependency-url", denied_url, "--dependency-url", healthy_url,
+                    "--redis-dependency-url", redis_healthy,
+                ]
             result = subprocess.run(
                 [
-                    sys.executable, "-m", "opspilot", "diagnose-http", "--service-url", service_url,
-                    "--redis-dependency-url", redis_denied, "--dependency-url", denied_url,
-                    "--dependency-url", healthy_url, "--redis-dependency-url", redis_healthy,
-                    "Check service and dependencies",
+                    sys.executable, "-m", "opspilot", "diagnose-http",
+                    *options, "Check service and dependencies",
                 ],
                 cwd=directory, capture_output=True, text=True, encoding="utf-8", timeout=20,
             )

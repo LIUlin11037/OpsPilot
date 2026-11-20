@@ -8,6 +8,7 @@ from time import sleep
 import pytest
 
 from opspilot.connectors.http_health import HttpHealthConnector
+from opspilot.health_config import HealthConfig, load_health_config
 
 
 def _cli(directory: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -101,3 +102,36 @@ def test_invalid_health_url_does_not_create_report_store() -> None:
     assert result.returncode == 2
     assert "without credentials" in result.stderr
     assert "secret" not in result.stderr
+
+
+def test_health_config_accepts_a_service_without_dependencies() -> None:
+    with TemporaryDirectory(prefix="opspilot-health-config-test-") as directory:
+        path = Path(directory) / "health.json"
+        path.write_text('{"service_url":"http://127.0.0.1:8080/health"}', encoding="utf-8")
+        assert load_health_config(path) == HealthConfig("http://127.0.0.1:8080/health")
+
+
+@pytest.mark.parametrize(
+    ("contents", "message"),
+    [
+        ("{", "valid UTF-8 JSON"),
+        ("{}", "service_url"),
+        ('{"service_url":"http://127.0.0.1", "dependencies":[]}', "unsupported fields"),
+        ('{"service_url":"http://127.0.0.1", "dependency_urls":"http://127.0.0.1"}', "dependency_urls"),
+        ('{"service_url":"http://127.0.0.1", "timeout_seconds":true}', "timeout_seconds"),
+    ],
+)
+def test_health_config_rejects_invalid_contents(contents: str, message: str) -> None:
+    with TemporaryDirectory(prefix="opspilot-health-config-test-") as directory:
+        path = Path(directory) / "health.json"
+        path.write_text(contents, encoding="utf-8")
+        with pytest.raises(ValueError, match=message):
+            load_health_config(path)
+
+
+def test_health_cli_rejects_mixed_configuration_and_cli_options() -> None:
+    with TemporaryDirectory(prefix="opspilot-health-config-test-") as directory:
+        result = _cli(directory, "diagnose-http", "--config", "health.json", "--timeout", "5", "Check")
+        assert not (Path(directory) / ".opspilot").exists()
+    assert result.returncode == 2
+    assert "--config takes dependency URLs and timeout from the configuration file" in result.stderr
