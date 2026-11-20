@@ -1,8 +1,8 @@
-"""Compare saved observations for the same message trace."""
+"""Compare observations from saved diagnosis reports."""
 
-from typing import TypedDict
+from typing import Literal, TypedDict
 
-from opspilot.core.diagnosis import Evidence, TargetTraceSummary
+from opspilot.core.diagnosis import Evidence, ObservationOutcome, TargetTraceSummary
 from opspilot.task_store import StoredReport
 
 ComparisonValue = str | int | None
@@ -26,6 +26,31 @@ class TraceComparison(TypedDict):
     after_task_id: str
     target: TraceScope
     changes: list[TraceChange]
+
+
+HealthRole = Literal["service", "dependency"]
+
+
+class EndpointObservation(TypedDict):
+    health: str
+    outcome: ObservationOutcome
+    http_status: int | None
+    reason: str | None
+
+
+class EndpointChange(TypedDict):
+    role: HealthRole
+    source: str
+    occurrence: int
+    before: EndpointObservation | None
+    after: EndpointObservation | None
+
+
+class HealthComparison(TypedDict):
+    before_task_id: str
+    after_task_id: str
+    service_url: str
+    changes: list[EndpointChange]
 
 
 def _scope(trace: TargetTraceSummary) -> TraceScope:
@@ -83,5 +108,57 @@ def compare_trace_reports(before: StoredReport, after: StoredReport) -> TraceCom
         "before_task_id": before["task_id"],
         "after_task_id": after["task_id"],
         "target": scope,
+        "changes": changes,
+    }
+
+
+def _health_observations(
+    report: StoredReport,
+) -> tuple[str, dict[tuple[HealthRole, str, int], EndpointObservation]]:
+    observations: dict[tuple[HealthRole, str, int], EndpointObservation] = {}
+    counts: dict[tuple[HealthRole, str], int] = {}
+    services: list[str] = []
+    for evidence in report["evidence"]:
+        tool = evidence["tool"]
+        if tool not in ("inspect_service_health", "inspect_dependency_health"):
+            continue
+        source = evidence["source"]
+        role: HealthRole = "service" if tool == "inspect_service_health" else "dependency"
+        if role == "service":
+            services.append(source)
+        key = (role, source)
+        occurrence = counts.get(key, 0) + 1
+        counts[key] = occurrence
+        observations[(role, source, occurrence)] = {
+            "health": evidence["health"],
+            "outcome": evidence["outcome"],
+            "http_status": evidence.get("http_status"),
+            "reason": evidence.get("reason"),
+        }
+    if len(services) != 1:
+        raise ValueError("Both task IDs must refer to HTTP health reports with one service endpoint.")
+    return services[0], observations
+
+
+def compare_health_reports(before: StoredReport, after: StoredReport) -> HealthComparison:
+    service, before_values = _health_observations(before)
+    after_service, after_values = _health_observations(after)
+    if service != after_service:
+        raise ValueError("Reports must match on the service endpoint URL.")
+
+    changes: list[EndpointChange] = []
+    for role, source, occurrence in before_values | after_values:
+        key = (role, source, occurrence)
+        previous = before_values.get(key)
+        current = after_values.get(key)
+        if current != previous:
+            changes.append({
+                "role": role, "source": source, "occurrence": occurrence,
+                "before": previous, "after": current,
+            })
+    return {
+        "before_task_id": before["task_id"],
+        "after_task_id": after["task_id"],
+        "service_url": service,
         "changes": changes,
     }

@@ -50,6 +50,16 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m opspilot diagnose-http --config .\health.json "复查服务和依赖"
 ```
 
+### 对比复查报告
+
+对同一个服务 URL 提交两次诊断后，用 `reports` 找到任务 ID，按基准、复查的顺序传给 `compare-http`。两份报告保存在同一个 SQLite 数据库。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot compare-http "BEFORE_TASK_ID" "AFTER_TASK_ID"
+```
+
+`changes` 列出变化的端点观测。`before` 或 `after` 为 `null` 表示该次报告缺少该端点的观测，例如主服务恢复后跳过了依赖检查。相同角色和 URL 的重复检查按 `occurrence` 从 1 开始匹配。
+
 ## 模拟诊断
 
 ```powershell

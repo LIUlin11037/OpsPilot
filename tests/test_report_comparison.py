@@ -9,11 +9,95 @@ from tempfile import TemporaryDirectory
 import pytest
 
 from opspilot.adapters.hirehub_snapshot import HireHubSnapshotAdapter
+from opspilot.core.diagnosis import DiagnosisReport, HealthEvidence
 from opspilot.core.target_trace import run_target_trace
-from opspilot.report_comparison import compare_trace_reports
+from opspilot.report_comparison import compare_health_reports, compare_trace_reports
 from opspilot.task_store import StoredReport, list_reports, save_report
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples/hirehub-notification-snapshot.json"
+SERVICE_URL = "http://127.0.0.1:8080/health"
+REDIS_URL = "redis://127.0.0.1:6379"
+
+
+@pytest.fixture
+def saved_health_pair() -> Iterator[tuple[Path, StoredReport, StoredReport]]:
+    service: HealthEvidence = {
+        "tool": "inspect_service_health", "source": SERVICE_URL,
+        "observed_at": "2026-11-20T06:00:00+00:00", "outcome": "observed",
+        "health": "unhealthy", "http_status": 503,
+    }
+    redis: HealthEvidence = {
+        "tool": "inspect_dependency_health", "source": REDIS_URL,
+        "observed_at": "2026-11-20T06:00:01+00:00", "outcome": "timeout",
+        "health": "unknown", "reason": "request_timeout",
+    }
+    before: DiagnosisReport = {
+        "question": "Check availability", "status": "undetermined",
+        "conclusion": "Service unavailable", "processing_correlation": None,
+        "evidence": [service, redis],
+    }
+    after: DiagnosisReport = {
+        **before, "status": "no_failure_observed", "conclusion": "Service is healthy",
+        "evidence": [{**service, "health": "healthy", "http_status": 204}],
+    }
+    with TemporaryDirectory(prefix="opspilot-health-comparison-") as directory:
+        database = Path(directory) / "reports.sqlite3"
+        yield database, save_report(database, before), save_report(database, after)
+
+
+def test_compare_http_distinguishes_a_skipped_dependency_from_failed_health(saved_health_pair) -> None:
+    database, before, after = saved_health_pair
+    original = database.read_bytes()
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "opspilot", "--db", str(database), "compare-http",
+            before["task_id"], after["task_id"],
+        ],
+        cwd=database.parent, capture_output=True, text=True, encoding="utf-8", timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "before_task_id": before["task_id"], "after_task_id": after["task_id"],
+        "service_url": SERVICE_URL,
+        "changes": [
+            {
+                "role": "service", "source": SERVICE_URL, "occurrence": 1,
+                "before": {"health": "unhealthy", "outcome": "observed", "http_status": 503, "reason": None},
+                "after": {"health": "healthy", "outcome": "observed", "http_status": 204, "reason": None},
+            },
+            {
+                "role": "dependency", "source": REDIS_URL, "occurrence": 1,
+                "before": {"health": "unknown", "outcome": "timeout", "http_status": None, "reason": "request_timeout"},
+                "after": None,
+            },
+        ],
+    }
+    assert database.read_bytes() == original
+
+
+def test_compare_http_preserves_repeated_dependency_occurrences(saved_health_pair) -> None:
+    _, before, _ = saved_health_pair
+    before["evidence"].append(dict(before["evidence"][1]))
+    after = deepcopy(before)
+    after["evidence"][1]["observed_at"] = "2026-11-20T06:01:00+00:00"
+    after["evidence"][2].update(outcome="observed", health="healthy")
+    after["evidence"][2].pop("reason")
+
+    change, = compare_health_reports(before, after)["changes"]
+    assert change["source"] == REDIS_URL and change["occurrence"] == 2
+    assert change["before"]["outcome"] == "timeout"
+    assert change["after"]["health"] == "healthy"
+
+
+def test_compare_http_rejects_different_service_or_report_kind(saved_health_pair) -> None:
+    _, before, after = saved_health_pair
+    after["evidence"][0]["source"] = "http://127.0.0.1:8081/health"
+    with pytest.raises(ValueError, match="service endpoint URL"):
+        compare_health_reports(before, after)
+
+    after["evidence"] = []
+    with pytest.raises(ValueError, match="must refer to HTTP health reports"):
+        compare_health_reports(before, after)
 
 
 @pytest.fixture
