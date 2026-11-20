@@ -13,6 +13,16 @@ python -m venv .venv
 
 启动成功时输出 `OpsPilot is ready.`。安装依赖后，启动和测试均可离线运行。
 
+## 按故障描述选择诊断流程
+
+`diagnose-auto` 根据描述中的中英文症状词，在 HTTP 健康检查和 RabbitMQ 队列诊断之间选择一个已配置的流程。HTTP 读取现有的健康配置文件，队列读取配置的 Management API 和虚拟主机。命令只调用选中的流程，并在报告的 `routing` 记录流程名称和匹配词。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot diagnose-auto --health-config .\health.json --management-url http://127.0.0.1:15672 --queue "orders" "RabbitMQ 队列积压"
+```
+
+描述同时命中两类症状、没有命中或缺少所选流程的配置时，命令会提示补充。可以聚焦一种症状后重试，也可以用 `diagnose-http` 或 `diagnose` 明确指定流程。自动选择只识别固定症状词，选中的流程仍按观测证据决定后续检查。
+
 ## HTTP 健康诊断
 
 将服务和可选依赖的健康检查 URL 提供给 `diagnose-http`。默认在服务端点异常或健康状态未知时检查已配置的依赖。

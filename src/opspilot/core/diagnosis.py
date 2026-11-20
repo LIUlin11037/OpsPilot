@@ -206,11 +206,20 @@ class NextCheck(TypedDict):
     description: str
 
 
+DiagnosisWorkflow = Literal["http_health", "queue"]
+
+
+class DiagnosisRoute(TypedDict):
+    workflow: DiagnosisWorkflow
+    matched_terms: list[str]
+
+
 class DiagnosisReport(DiagnosisReportFields, total=False):
     tool_calls: list[ToolCall]
     requested_message_id: str
     target_trace: TargetTraceSummary
     next_checks: list[NextCheck]
+    routing: DiagnosisRoute
 
 
 _NEXT_CHECK_DESCRIPTIONS: dict[NextCheckAction, str] = {

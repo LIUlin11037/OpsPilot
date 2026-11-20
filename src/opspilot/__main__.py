@@ -19,10 +19,17 @@ from opspilot.connectors.mysql import MySQLConnector, MySQLHealthConnector
 from opspilot.connectors.rabbitmq import RabbitMQQueueConnector
 from opspilot.connectors.redis_health import RedisHealthConnector
 from opspilot.connectors.simulated import SimulatedQueueConnector
-from opspilot.core.diagnosis import HealthTool, TargetProcessingTool, run_diagnosis, run_queue_diagnosis
+from opspilot.core.diagnosis import (
+    DiagnosisReport,
+    HealthTool,
+    TargetProcessingTool,
+    run_diagnosis,
+    run_queue_diagnosis,
+)
 from opspilot.core.health_diagnosis import run_health_diagnosis
 from opspilot.core.startup import run_startup
 from opspilot.core.target_trace import run_target_trace
+from opspilot.core.triage import select_diagnosis_route
 from opspilot.health_config import DEFAULT_HEALTH_TIMEOUT_SECONDS, HealthConfig, load_health_config
 from opspilot.report_comparison import compare_health_reports, compare_queue_reports, compare_trace_reports
 from opspilot.report_markdown import (
@@ -180,6 +187,50 @@ def _health_config(args: argparse.Namespace) -> HealthConfig:
     )
 
 
+def _run_configured_health(
+    question: str, config: HealthConfig, *, check_dependencies: bool = False,
+) -> DiagnosisReport:
+    service = HttpHealthConnector(config.service_url, config.timeout_seconds)
+    dependencies: list[HealthTool] = [
+        HttpHealthConnector(url, config.timeout_seconds) for url in config.dependency_urls
+    ]
+    dependencies.extend(
+        RedisHealthConnector(url, config.timeout_seconds) for url in config.redis_dependency_urls
+    )
+    if config.mysql_dependency_urls:
+        username, password = _mysql_credentials()
+        dependencies.extend(
+            MySQLHealthConnector(url, username, password, config.timeout_seconds)
+            for url in config.mysql_dependency_urls
+        )
+    return run_health_diagnosis(
+        question, service, dependencies, check_dependencies=check_dependencies,
+    )
+
+
+def _run_auto_diagnosis(args: argparse.Namespace, parser: argparse.ArgumentParser) -> DiagnosisReport:
+    question = args.question.strip()
+    if not question:
+        raise ValueError("question must not be empty")
+    if (args.management_url is None) != (args.queue is None):
+        raise ValueError("--management-url and --queue must be supplied together")
+    if args.management_url is None and (args.vhost is not None or args.timeout is not None):
+        raise ValueError("--vhost and --timeout require --management-url")
+
+    routing = select_diagnosis_route(question)
+    if routing["workflow"] == "http_health":
+        if args.health_config is None:
+            raise ValueError("HTTP health symptoms matched. Supply --health-config.")
+        report = _run_configured_health(question, load_health_config(args.health_config))
+    else:
+        if args.management_url is None:
+            raise ValueError("Queue symptoms matched. Supply --management-url and --queue.")
+        report = run_queue_diagnosis(question, _rabbitmq_connector(args, parser))
+
+    report["routing"] = routing
+    return report
+
+
 def main() -> None:
     no_processing_data = SimulatedProcessingAdapter()
     running_backlog = SimulatedQueueConnector(
@@ -258,6 +309,13 @@ def main() -> None:
         "--timeout", type=float, metavar="SECONDS", help="Socket timeout (default: 5)."
     )
     health.add_argument("question", help="Incident description.")
+    auto_diagnose = commands.add_parser(
+        "diagnose-auto", help="Choose a configured HTTP health or RabbitMQ queue workflow.",
+    )
+    auto_diagnose.add_argument("--health-config", type=Path, help="JSON file with health endpoints.")
+    auto_diagnose.add_argument("--management-url", help="RabbitMQ Management API base URL.")
+    _add_queue_options(auto_diagnose)
+    auto_diagnose.add_argument("question", help="Incident description.")
     hirehub = commands.add_parser(
         "diagnose-hirehub", help="Diagnose a HireHub delivery with live reads or a snapshot."
     )
@@ -407,26 +465,16 @@ def main() -> None:
             if not question:
                 health.error("question must not be empty")
             try:
-                config = _health_config(args)
-                service = HttpHealthConnector(config.service_url, config.timeout_seconds)
-                dependencies: list[HealthTool] = [
-                    HttpHealthConnector(url, config.timeout_seconds) for url in config.dependency_urls
-                ]
-                dependencies.extend(
-                    RedisHealthConnector(url, config.timeout_seconds)
-                    for url in config.redis_dependency_urls
-                )
-                if config.mysql_dependency_urls:
-                    username, password = _mysql_credentials()
-                    dependencies.extend(
-                        MySQLHealthConnector(url, username, password, config.timeout_seconds)
-                        for url in config.mysql_dependency_urls
-                    )
-                report = run_health_diagnosis(
-                    question, service, dependencies, check_dependencies=args.check_dependencies,
+                report = _run_configured_health(
+                    question, _health_config(args), check_dependencies=args.check_dependencies,
                 )
             except ValueError as error:
                 health.error(str(error))
+        elif args.command == "diagnose-auto":
+            try:
+                report = _run_auto_diagnosis(args, auto_diagnose)
+            except ValueError as error:
+                auto_diagnose.error(str(error))
         elif args.command == "diagnose-hirehub":
             question = args.question.strip()
             if not question:
