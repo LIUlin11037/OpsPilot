@@ -8,6 +8,7 @@ from time import sleep
 import pytest
 
 from opspilot.connectors.http_health import HttpHealthConnector
+from opspilot.connectors.mysql import MySQLConnector, MySQLRead
 from opspilot.health_config import HealthConfig, load_health_config
 
 
@@ -135,3 +136,52 @@ def test_health_cli_rejects_mixed_configuration_and_cli_options() -> None:
         assert not (Path(directory) / ".opspilot").exists()
     assert result.returncode == 2
     assert "--config takes dependency URLs and timeout from the configuration file" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("service_status", "from_config"), [(204, False), (503, False), (503, True)]
+)
+def test_health_cli_uses_mysql_only_after_anomaly(
+    monkeypatch, capsys, processing_service, service_status, from_config,
+) -> None:
+    from opspilot.__main__ import main
+
+    queries = []
+
+    def select(self, query, parameters):
+        assert self.username == "reader" and self.password == "ephemeral-secret"
+        queries.append((query, parameters))
+        return MySQLRead("observed", "2026-11-20T06:00:00+00:00", ({"ok": 1},))
+
+    monkeypatch.setattr(MySQLConnector, "select", select)
+    monkeypatch.setenv("OPSPILOT_MYSQL_USER", "reader")
+    monkeypatch.setenv("OPSPILOT_MYSQL_PASSWORD", "ephemeral-secret")
+    mysql_url = "mysql://127.0.0.1:13306"
+    with TemporaryDirectory(prefix="opspilot-health-mysql-test-") as directory:
+        database = Path(directory) / "reports.sqlite3"
+        with processing_service(lambda path: (service_status, b"")) as (url, requests):
+            if from_config:
+                config = Path(directory) / "health.json"
+                config.write_text(json.dumps({
+                    "service_url": url, "mysql_dependency_urls": [mysql_url],
+                }), encoding="utf-8")
+                options = ["--config", str(config)]
+            else:
+                options = ["--service-url", url, "--mysql-dependency-url", mysql_url]
+            monkeypatch.setattr(sys, "argv", [
+                "opspilot", "--db", str(database), "diagnose-http", *options, "Check database",
+            ])
+            main()
+        output = capsys.readouterr().out
+        assert database.is_file()
+    assert requests == ["/processing"]
+    assert "ephemeral-secret" not in output
+    report = json.loads(output)
+    if service_status == 204:
+        assert queries == []
+        assert len(report["evidence"]) == 1
+    else:
+        assert queries == [("SELECT 1 AS ok", ())]
+        assert report["status"] == "undetermined"
+        assert report["evidence"][1]["source"] == mysql_url
+        assert report["evidence"][1]["health"] == "healthy"

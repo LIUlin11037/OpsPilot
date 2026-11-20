@@ -1,4 +1,4 @@
-"""Read local configuration for HTTP and Redis health checks."""
+"""Read local configuration for service and dependency health checks."""
 
 import json
 from dataclasses import dataclass
@@ -6,7 +6,10 @@ from math import isfinite
 from pathlib import Path
 
 DEFAULT_HEALTH_TIMEOUT_SECONDS = 5.0
-_FIELDS = {"service_url", "dependency_urls", "redis_dependency_urls", "timeout_seconds"}
+_FIELDS = {
+    "service_url", "dependency_urls", "redis_dependency_urls", "mysql_dependency_urls",
+    "timeout_seconds",
+}
 
 
 @dataclass(frozen=True)
@@ -15,6 +18,7 @@ class HealthConfig:
     dependency_urls: tuple[str, ...] = ()
     redis_dependency_urls: tuple[str, ...] = ()
     timeout_seconds: float = DEFAULT_HEALTH_TIMEOUT_SECONDS
+    mysql_dependency_urls: tuple[str, ...] = ()
 
 
 def _urls(value: object, field: str) -> tuple[str, ...]:
@@ -54,4 +58,5 @@ def load_health_config(path: Path) -> HealthConfig:
         dependency_urls=_urls(data.get("dependency_urls", []), "dependency_urls"),
         redis_dependency_urls=_urls(data.get("redis_dependency_urls", []), "redis_dependency_urls"),
         timeout_seconds=timeout,
+        mysql_dependency_urls=_urls(data.get("mysql_dependency_urls", []), "mysql_dependency_urls"),
     )

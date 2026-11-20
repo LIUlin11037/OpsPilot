@@ -31,17 +31,24 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m opspilot diagnose-http --service-url http://127.0.0.1:8080/health --redis-dependency-url redis://127.0.0.1:6379 "服务健康检查失败，Redis 能响应吗？"
 ```
 
-`--dependency-url` 和 `--redis-dependency-url` 可以同时使用，也可以分别重复传入。主服务异常时先检查 HTTP 依赖，再检查 Redis，组内按传入顺序执行。每个端点分别使用 `--timeout`，报告按调用顺序保存各自的来源、结果和耗时。
+依赖是 MySQL 时，安装 `.[hirehub]` 可选依赖，并通过 `OPSPILOT_MYSQL_USER` 和 `OPSPILOT_MYSQL_PASSWORD` 提供只读账号。`--mysql-dependency-url` 接收 `mysql://HOST[:PORT]`，对端点执行 `SELECT 1` 核实连接和查询响应。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot diagnose-http --service-url http://127.0.0.1:8080/health --mysql-dependency-url mysql://127.0.0.1:3306 "服务异常，MySQL 能响应吗？"
+```
+
+三种依赖参数可以同时使用，也可以分别重复传入。主服务异常时按 HTTP、Redis、MySQL 的顺序检查，组内按传入顺序执行。每个端点分别使用 `--timeout`，报告按调用顺序保存各自的来源、结果和耗时。
 
 ### 复用本地配置
 
-将端点和超时保存到 UTF-8 JSON 文件，例如 `health.json`。`service_url` 必填，两个依赖数组默认为空，`timeout_seconds` 默认为 5。使用 `--config` 时，服务、依赖和超时均从文件读取。
+将端点和超时保存到 UTF-8 JSON 文件，例如 `health.json`。`service_url` 必填，三个依赖数组默认为空，`timeout_seconds` 默认为 5。使用 `--config` 时，服务、依赖和超时均从文件读取。
 
 ```json
 {
   "service_url": "http://127.0.0.1:8080/health",
   "dependency_urls": ["http://127.0.0.1:8081/health"],
   "redis_dependency_urls": ["redis://127.0.0.1:6379"],
+  "mysql_dependency_urls": ["mysql://127.0.0.1:3306"],
   "timeout_seconds": 2
 }
 ```

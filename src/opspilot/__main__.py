@@ -13,7 +13,7 @@ from opspilot.adapters.http_processing import HttpProcessingAdapter
 from opspilot.adapters.json_processing import JsonProcessingAdapter
 from opspilot.adapters.simulated import SimulatedProcessingAdapter
 from opspilot.connectors.http_health import HttpHealthConnector
-from opspilot.connectors.mysql import MySQLConnector
+from opspilot.connectors.mysql import MySQLConnector, MySQLHealthConnector
 from opspilot.connectors.rabbitmq import RabbitMQQueueConnector
 from opspilot.connectors.redis_health import RedisHealthConnector
 from opspilot.connectors.simulated import SimulatedQueueConnector
@@ -86,6 +86,14 @@ def _target_processing_tool(
     return None
 
 
+def _mysql_credentials() -> tuple[str, str]:
+    username = os.getenv("OPSPILOT_MYSQL_USER")
+    password = os.getenv("OPSPILOT_MYSQL_PASSWORD")
+    if not username or password is None:
+        raise ValueError("set OPSPILOT_MYSQL_USER and OPSPILOT_MYSQL_PASSWORD")
+    return username, password
+
+
 def _hirehub_live_adapter(
     args: argparse.Namespace, parser: argparse.ArgumentParser
 ) -> HireHubLiveAdapter:
@@ -97,13 +105,9 @@ def _hirehub_live_adapter(
     if not environment:
         parser.error("--environment must not be empty")
 
-    username = os.getenv("OPSPILOT_MYSQL_USER")
-    password = os.getenv("OPSPILOT_MYSQL_PASSWORD")
-    if not username or password is None:
-        parser.error("set OPSPILOT_MYSQL_USER and OPSPILOT_MYSQL_PASSWORD")
-
-    queue = _rabbitmq_connector(args, parser)
     try:
+        username, password = _mysql_credentials()
+        queue = _rabbitmq_connector(args, parser)
         mysql = MySQLConnector(
             host="127.0.0.1" if args.mysql_host is None else args.mysql_host,
             port=3306 if args.mysql_port is None else args.mysql_port,
@@ -125,7 +129,10 @@ def _require_report(database: Path, task_id: str, parser: argparse.ArgumentParse
 
 def _health_config(args: argparse.Namespace) -> HealthConfig:
     if args.config is not None:
-        if args.dependency_url or args.redis_dependency_url or args.timeout is not None:
+        if (
+            args.dependency_url or args.redis_dependency_url
+            or args.mysql_dependency_url or args.timeout is not None
+        ):
             raise ValueError("--config takes dependency URLs and timeout from the configuration file.")
         return load_health_config(args.config)
     return HealthConfig(
@@ -133,6 +140,7 @@ def _health_config(args: argparse.Namespace) -> HealthConfig:
         dependency_urls=tuple(args.dependency_url),
         redis_dependency_urls=tuple(args.redis_dependency_url),
         timeout_seconds=DEFAULT_HEALTH_TIMEOUT_SECONDS if args.timeout is None else args.timeout,
+        mysql_dependency_urls=tuple(args.mysql_dependency_url),
     )
 
 
@@ -201,6 +209,9 @@ def main() -> None:
     )
     health.add_argument(
         "--redis-dependency-url", action="append", default=[], help="Redis dependency URL. Repeatable."
+    )
+    health.add_argument(
+        "--mysql-dependency-url", action="append", default=[], help="MySQL dependency URL. Repeatable."
     )
     health.add_argument(
         "--timeout", type=float, metavar="SECONDS", help="Socket timeout (default: 5)."
@@ -313,6 +324,12 @@ def main() -> None:
                     RedisHealthConnector(url, config.timeout_seconds)
                     for url in config.redis_dependency_urls
                 )
+                if config.mysql_dependency_urls:
+                    username, password = _mysql_credentials()
+                    dependencies.extend(
+                        MySQLHealthConnector(url, username, password, config.timeout_seconds)
+                        for url in config.mysql_dependency_urls
+                    )
                 report = run_health_diagnosis(question, service, dependencies)
             except ValueError as error:
                 health.error(str(error))

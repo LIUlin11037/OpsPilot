@@ -70,6 +70,7 @@ class HealthReadFields(Observation):
 
 class HealthRead(HealthReadFields, total=False):
     http_status: int
+    mysql_error_code: int
     reason: str
 
 
