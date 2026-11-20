@@ -65,10 +65,10 @@ python -m venv .venv
 
 ```powershell
 .\.venv\Scripts\python.exe -m opspilot reports --service-url http://127.0.0.1:8080/health --limit 2
-.\.venv\Scripts\python.exe -m opspilot compare-http "BEFORE_TASK_ID" "AFTER_TASK_ID"
+.\.venv\Scripts\python.exe -m opspilot compare-http "BEFORE_TASK_ID" "AFTER_TASK_ID" --format markdown
 ```
 
-`changes` 列出变化的端点观测。`before` 或 `after` 为 `null` 表示该次报告缺少该端点的观测，例如主服务恢复后跳过了依赖检查。相同角色和 URL 的重复检查按 `occurrence` 从 1 开始匹配。
+Markdown 表格并排显示基准和复查观测，包括健康状态、HTTP 状态码和失败原因。默认输出 JSON，`changes` 列出变化的端点观测。任一侧缺少观测时，Markdown 显示 `No observation recorded`，JSON 以 `null` 表示。相同角色和 URL 的重复检查按 `occurrence` 从 1 开始匹配。
 
 ## 模拟诊断
 

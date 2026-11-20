@@ -12,6 +12,7 @@ from opspilot.adapters.hirehub_snapshot import HireHubSnapshotAdapter
 from opspilot.core.diagnosis import DiagnosisReport, HealthEvidence
 from opspilot.core.target_trace import run_target_trace
 from opspilot.report_comparison import compare_health_reports, compare_trace_reports
+from opspilot.report_markdown import render_health_comparison_markdown
 from opspilot.task_store import StoredReport, list_reports, save_report
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples/hirehub-notification-snapshot.json"
@@ -73,6 +74,39 @@ def test_compare_http_distinguishes_a_skipped_dependency_from_failed_health(save
         ],
     }
     assert database.read_bytes() == original
+
+
+def test_compare_http_renders_markdown_with_missing_observations(saved_health_pair) -> None:
+    database, before, after = saved_health_pair
+    original = database.read_bytes()
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "opspilot", "--db", str(database), "compare-http",
+            before["task_id"], after["task_id"], "--format", "markdown",
+        ],
+        cwd=database.parent, capture_output=True, text=True, encoding="utf-8", timeout=20,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"**Baseline task ID** {before['task_id']}" in result.stdout
+    assert f"**Follow-up task ID** {after['task_id']}" in result.stdout
+    assert (
+        f"| Service | {SERVICE_URL} | 1 | Outcome observed, Health unhealthy, HTTP status 503 | "
+        "Outcome observed, Health healthy, HTTP status 204 |"
+    ) in result.stdout
+    assert (
+        f"| Dependency | {REDIS_URL} | 1 | Outcome timeout, Health unknown, "
+        r"Reason request\_timeout | No observation recorded |"
+    ) in result.stdout
+    assert database.read_bytes() == original
+
+
+def test_health_comparison_markdown_describes_unchanged_observations(saved_health_pair) -> None:
+    _, before, _ = saved_health_pair
+    markdown = render_health_comparison_markdown(compare_health_reports(before, before))
+
+    assert "No changes in recorded endpoint observations." in markdown
+    assert "healthy" not in markdown
 
 
 def test_compare_http_preserves_repeated_dependency_occurrences(saved_health_pair) -> None:

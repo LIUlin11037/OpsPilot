@@ -23,7 +23,7 @@ from opspilot.core.startup import run_startup
 from opspilot.core.target_trace import run_target_trace
 from opspilot.health_config import DEFAULT_HEALTH_TIMEOUT_SECONDS, HealthConfig, load_health_config
 from opspilot.report_comparison import compare_health_reports, compare_trace_reports
-from opspilot.report_markdown import render_markdown
+from opspilot.report_markdown import render_health_comparison_markdown, render_markdown
 from opspilot.task_store import StoredReport, list_reports, load_report, save_report
 
 
@@ -245,18 +245,19 @@ def main() -> None:
     reports_command.add_argument("--environment", help="Match a HireHub environment label.")
     reports_command.add_argument("--service-url", help="Match the exact main service health URL.")
     report_comparisons = {
-        "compare-hirehub": (
-            commands.add_parser("compare-hirehub", help="Compare saved reports for one HireHub event."),
-            compare_trace_reports,
+        "compare-hirehub": commands.add_parser(
+            "compare-hirehub", help="Compare saved reports for one HireHub event."
         ),
-        "compare-http": (
-            commands.add_parser("compare-http", help="Compare saved HTTP health reports for one service."),
-            compare_health_reports,
+        "compare-http": commands.add_parser(
+            "compare-http", help="Compare saved HTTP health reports for one service."
         ),
     }
-    for comparison_parser, _ in report_comparisons.values():
+    for comparison_parser in report_comparisons.values():
         comparison_parser.add_argument("before_task_id", help="Task ID of the baseline report.")
         comparison_parser.add_argument("after_task_id", help="Task ID of the follow-up report.")
+    report_comparisons["compare-http"].add_argument(
+        "--format", choices=("json", "markdown"), default="json"
+    )
     inspect_queue = commands.add_parser(
         "inspect-queue", help="Read queue metrics from RabbitMQ Management."
     )
@@ -307,13 +308,19 @@ def main() -> None:
             print(json.dumps(summaries, indent=2))
             return
         if args.command in report_comparisons:
-            comparison_parser, compare_reports = report_comparisons[args.command]
             before = _require_report(args.db, args.before_task_id, parser)
             after = _require_report(args.db, args.after_task_id, parser)
             try:
-                comparison = compare_reports(before, after)
+                if args.command == "compare-http":
+                    comparison = compare_health_reports(before, after)
+                    if args.format == "markdown":
+                        markdown = render_health_comparison_markdown(comparison)
+                        sys.stdout.buffer.write(markdown.encode("utf-8", "backslashreplace"))
+                        return
+                else:
+                    comparison = compare_trace_reports(before, after)
             except ValueError as error:
-                comparison_parser.error(str(error))
+                report_comparisons[args.command].error(str(error))
             print(json.dumps(comparison, indent=2))
             return
         if args.command == "report":

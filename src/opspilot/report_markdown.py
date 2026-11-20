@@ -1,9 +1,10 @@
-"""Render a saved diagnosis report without reinterpreting its evidence."""
+"""Render saved diagnoses and report comparisons as Markdown."""
 
 import re
 from collections.abc import Mapping
 from html import escape
 
+from opspilot.report_comparison import EndpointObservation, HealthComparison
 from opspilot.task_store import StoredReport
 
 _MARKDOWN = re.compile(r"([\\`*_\[\]|~])")
@@ -46,6 +47,38 @@ def _evidence_details(item: Mapping[str, object]) -> str:
     return ", ".join(
         f"{label} {_value(item[key])}" for key, label in _EVIDENCE_FIELDS.items() if key in item
     )
+
+
+def _endpoint_observation(observation: EndpointObservation | None) -> str:
+    if observation is None:
+        return "No observation recorded"
+    details = _evidence_details({key: value for key, value in observation.items() if value is not None})
+    return f"Outcome {_value(observation['outcome'])}, {details}"
+
+
+def render_health_comparison_markdown(comparison: HealthComparison) -> str:
+    lines = [
+        "# OpsPilot health report comparison",
+        "",
+        f"- **Service URL** {_value(comparison['service_url'])}",
+        f"- **Baseline task ID** {_value(comparison['before_task_id'])}",
+        f"- **Follow-up task ID** {_value(comparison['after_task_id'])}",
+        "",
+    ]
+    if comparison["changes"]:
+        lines.extend([
+            "| Role | Endpoint | Occurrence | Baseline | Follow-up |",
+            "| --- | --- | ---: | --- | --- |",
+        ])
+        for change in comparison["changes"]:
+            lines.append(
+                f"| {change['role'].capitalize()} | {_value(change['source'])} | "
+                f"{change['occurrence']} | {_endpoint_observation(change['before'])} | "
+                f"{_endpoint_observation(change['after'])} |"
+            )
+    else:
+        lines.append("No changes in recorded endpoint observations.")
+    return "\n".join(lines) + "\n"
 
 
 def render_markdown(report: StoredReport) -> str:
