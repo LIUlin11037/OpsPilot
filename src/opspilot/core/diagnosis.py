@@ -11,11 +11,14 @@ from langgraph.graph import END, START, StateGraph
 UnavailableOutcome = Literal["timeout", "missing"]
 ObservationOutcome = Literal["observed", UnavailableOutcome]
 ToolName = Literal[
-    "inspect_queue", "inspect_consumer", "inspect_processing", "inspect_target_trace"
+    "inspect_queue", "inspect_consumer", "inspect_processing", "inspect_target_trace",
+    "inspect_service_health", "inspect_dependency_health",
 ]
 ProcessingResult = Literal["succeeded", "failed"]
 ProcessingCorrelation = Literal["matched", "not_in_sample", "unknown"]
-DiagnosisStatus = Literal["no_backlog_observed", "consumer_stopped", "undetermined"]
+DiagnosisStatus = Literal[
+    "no_backlog_observed", "no_failure_observed", "consumer_stopped", "undetermined"
+]
 
 
 class Observation(TypedDict):
@@ -60,6 +63,20 @@ class UnavailableQueueEvidence(UnavailableEvidence, total=False):
     unacknowledged_messages: int | None
 
 
+class HealthReadFields(Observation):
+    outcome: ObservationOutcome
+    health: Literal["healthy", "unhealthy", "unknown"]
+
+
+class HealthRead(HealthReadFields, total=False):
+    http_status: int
+    reason: str
+
+
+class HealthEvidence(HealthRead):
+    tool: Literal["inspect_service_health", "inspect_dependency_health"]
+
+
 class TraceEvidenceFields(Observation):
     tool: Literal["inspect_target_trace"]
     checkpoint: str
@@ -87,7 +104,8 @@ class TraceEvidence(TraceEvidenceFields, total=False):
 
 
 Evidence = (
-    QueueEvidence | ConsumerEvidence | ProcessingEvidence | UnavailableEvidence | TraceEvidence
+    QueueEvidence | ConsumerEvidence | ProcessingEvidence | UnavailableEvidence |
+    TraceEvidence | HealthEvidence
 )
 
 

@@ -12,10 +12,12 @@ from opspilot.adapters.hirehub_snapshot import NOTIFICATION_QUEUE, HireHubSnapsh
 from opspilot.adapters.http_processing import HttpProcessingAdapter
 from opspilot.adapters.json_processing import JsonProcessingAdapter
 from opspilot.adapters.simulated import SimulatedProcessingAdapter
+from opspilot.connectors.http_health import HttpHealthConnector
 from opspilot.connectors.mysql import MySQLConnector
 from opspilot.connectors.rabbitmq import RabbitMQQueueConnector
 from opspilot.connectors.simulated import SimulatedQueueConnector
 from opspilot.core.diagnosis import TargetProcessingTool, run_diagnosis, run_queue_diagnosis
+from opspilot.core.health_diagnosis import run_health_diagnosis
 from opspilot.core.startup import run_startup
 from opspilot.core.target_trace import run_target_trace
 from opspilot.report_comparison import compare_trace_reports
@@ -175,6 +177,13 @@ def main() -> None:
     )
     diagnose.add_argument("--message-id", help="Look up processing records for an exact ID.")
     diagnose.add_argument("question", help="Incident description.")
+    health = commands.add_parser("diagnose-http", help="Diagnose a service through its health endpoint.")
+    health.add_argument("--service-url", required=True, help="Service health URL.")
+    health.add_argument("--dependency-url", help="Optional dependency health URL.")
+    health.add_argument(
+        "--timeout", type=float, default=5.0, metavar="SECONDS", help="Socket timeout (default: 5)."
+    )
+    health.add_argument("question", help="Incident description.")
     hirehub = commands.add_parser(
         "diagnose-hirehub", help="Diagnose a HireHub delivery with live reads or a snapshot."
     )
@@ -257,6 +266,20 @@ def main() -> None:
             return
         if args.command == "report":
             stored_report = _require_report(args.db, args.task_id, parser)
+        elif args.command == "diagnose-http":
+            question = args.question.strip()
+            if not question:
+                health.error("question must not be empty")
+            try:
+                service = HttpHealthConnector(args.service_url, args.timeout)
+                dependency = (
+                    HttpHealthConnector(args.dependency_url, args.timeout)
+                    if args.dependency_url is not None else None
+                )
+                report = run_health_diagnosis(question, service, dependency)
+            except ValueError as error:
+                health.error(str(error))
+            stored_report = save_report(args.db, report)
         elif args.command == "diagnose-hirehub":
             question = args.question.strip()
             if not question:

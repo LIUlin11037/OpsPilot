@@ -8,6 +8,7 @@ from opspilot.task_store import StoredReport
 
 _MARKDOWN = re.compile(r"([\\`*_\[\]|~])")
 _EVIDENCE_FIELDS = {
+    "health": "Health",
     "status": "State",
     "pending_messages": "Pending messages",
     "unacknowledged_messages": "Unacknowledged messages",

@@ -1,6 +1,6 @@
 # OpsPilot
 
-OpsPilot 面向异构微服务的故障诊断。当前支持通过 CLI 提交「消息已入队但未消费」的模拟诊断任务。
+OpsPilot 面向异构微服务的只读故障诊断。CLI 支持消息积压、HireHub 投递通知追踪和 HTTP 健康端点诊断。
 
 在仓库根目录使用 Python 3.10 或更高版本运行以下命令（Windows PowerShell）。
 
@@ -12,6 +12,18 @@ python -m venv .venv
 ```
 
 启动成功时输出 `OpsPilot is ready.`。安装依赖后，启动和测试均可离线运行。
+
+## HTTP 健康诊断
+
+将服务和可选依赖的健康检查 URL 提供给 `diagnose-http`。服务端点异常或健康状态未知时，LangGraph 才会读取已配置的依赖端点。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot diagnose-http --service-url http://127.0.0.1:8080/health --dependency-url http://127.0.0.1:8081/health "服务健康检查失败，依赖能访问吗？"
+```
+
+请配置以 HTTP 状态码表达健康的端点。命令通过 GET 读取端点的原始响应，`2xx` 记为 `healthy`，`5xx` 记为 `unhealthy`，其余状态、超时和连接失败记为 `unknown`。报告记录端点、观察时间、状态码和调用耗时。服务异常时，依赖结果可缩小核查范围，诊断状态为 `undetermined`。报告保存后可按任务 ID 回看。
+
+运行 `python -m pytest tests/test_http_health.py -q` 可用自动启停的本地 HTTP 服务复跑这条诊断流程。
 
 ## 模拟诊断
 
