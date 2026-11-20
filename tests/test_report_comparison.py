@@ -13,7 +13,7 @@ from opspilot.connectors.rabbitmq import RabbitMQUnavailableEvidence
 from opspilot.core.diagnosis import DiagnosisReport, HealthEvidence, QueueEvidence
 from opspilot.core.target_trace import run_target_trace
 from opspilot.report_comparison import compare_health_reports, compare_queue_reports, compare_trace_reports
-from opspilot.report_markdown import render_health_comparison_markdown
+from opspilot.report_markdown import render_health_comparison_markdown, render_queue_comparison_markdown
 from opspilot.task_store import StoredReport, list_reports, save_report
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples/hirehub-notification-snapshot.json"
@@ -104,6 +104,41 @@ def test_compare_queue_can_include_a_skipped_consumer_check(saved_queue_pair) ->
         }],
     }
     assert database.read_bytes() == original
+
+
+@pytest.mark.parametrize("include_consumer_health", [False, True])
+def test_compare_queue_renders_markdown(saved_queue_pair, include_consumer_health: bool) -> None:
+    database, before, after = saved_queue_pair
+    original = database.read_bytes()
+    options = ["--format", "markdown"]
+    if include_consumer_health:
+        options.append("--include-consumer-health")
+
+    result = _compare(database, "compare-queue", before["task_id"], after["task_id"], *options)
+
+    assert result.returncode == 0, result.stderr
+    assert f"**Queue source** {QUEUE_SOURCE}" in result.stdout
+    assert f"**Baseline task ID** {before['task_id']}" in result.stdout
+    assert f"**Follow-up task ID** {after['task_id']}" in result.stdout
+    assert "| Pending messages | 6 | Unavailable |" in result.stdout
+    assert "| Unacknowledged messages | 3 | 0 |" in result.stdout
+    assert ("## Consumer endpoint changes" in result.stdout) == include_consumer_health
+    if include_consumer_health:
+        assert (
+            f"| Consumer | {CONSUMER_URL} | 1 | Outcome observed, Health unhealthy, HTTP status 503 "
+            "| No observation recorded |"
+        ) in result.stdout
+    assert database.read_bytes() == original
+
+
+def test_queue_comparison_markdown_describes_unchanged_observations(saved_queue_pair) -> None:
+    _, before, _ = saved_queue_pair
+    comparison = compare_queue_reports(before, before, include_consumer_health=True)
+
+    markdown = render_queue_comparison_markdown(comparison)
+
+    assert "No changes in recorded queue observations." in markdown
+    assert "No changes in recorded endpoint observations." in markdown
 
 
 @pytest.mark.parametrize("source", [CONSUMER_URL, CONSUMER_URL + "/replacement"])

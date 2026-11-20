@@ -164,6 +164,12 @@ RabbitMQ 模式保留队列证据及读取耗时。报告分别描述待投递�
 
 加上 `--include-consumer-health`，输出会同时包含 `consumer_health_changes`。对比按消费者端点 URL 匹配，列出健康状态、HTTP 状态码或读取结果的变化。若某次报告缺少对应端点观测，该侧显示 `null`，例如队列清空后跳过了健康检查。
 
+默认输出 JSON。加上 `--format markdown` 可按表格查看变化。不可用的队列指标显示为 `Unavailable`，缺少的端点观测显示为 `No observation recorded`。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot compare-queue "BEFORE_TASK_ID" "AFTER_TASK_ID" --include-consumer-health --format markdown
+```
+
 ### 查看消费者端点健康
 
 已知消费者的 HTTP 健康端点时，可在 RabbitMQ 模式加上 `--consumer-health-url`。观察到待投递或待确认消息时，OpsPilot 发送只读 GET，记录端点健康状态、观测时间和耗时。待投递数缺失时，已观测到的待确认消息也能触发检查。健康状态说明该端点当时的响应，积压原因仍需结合队列和业务证据核查。

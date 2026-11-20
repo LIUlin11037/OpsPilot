@@ -23,7 +23,11 @@ from opspilot.core.startup import run_startup
 from opspilot.core.target_trace import run_target_trace
 from opspilot.health_config import DEFAULT_HEALTH_TIMEOUT_SECONDS, HealthConfig, load_health_config
 from opspilot.report_comparison import compare_health_reports, compare_queue_reports, compare_trace_reports
-from opspilot.report_markdown import render_health_comparison_markdown, render_markdown
+from opspilot.report_markdown import (
+    render_health_comparison_markdown,
+    render_markdown,
+    render_queue_comparison_markdown,
+)
 from opspilot.task_store import StoredReport, list_reports, load_report, save_report
 
 
@@ -275,7 +279,7 @@ def main() -> None:
         comparison_parser = report_comparisons[command]
         comparison_parser.add_argument("before_task_id", help="Task ID of the baseline report.")
         comparison_parser.add_argument("after_task_id", help="Task ID of the follow-up report.")
-    for command in ("compare-http", "compare-http-latest"):
+    for command in ("compare-http", "compare-http-latest", "compare-queue"):
         report_comparisons[command].add_argument(
             "--format", choices=("json", "markdown"), default="json"
         )
@@ -343,6 +347,7 @@ def main() -> None:
                 before_id, after_id = args.before_task_id, args.after_task_id
             before = _require_report(args.db, before_id, parser)
             after = _require_report(args.db, after_id, parser)
+            markdown = None
             try:
                 if args.command == "compare-hirehub":
                     comparison = compare_trace_reports(before, after)
@@ -350,15 +355,18 @@ def main() -> None:
                     comparison = compare_queue_reports(
                         before, after, include_consumer_health=args.include_consumer_health,
                     )
+                    if args.format == "markdown":
+                        markdown = render_queue_comparison_markdown(comparison)
                 else:
                     comparison = compare_health_reports(before, after)
                     if args.format == "markdown":
                         markdown = render_health_comparison_markdown(comparison)
-                        sys.stdout.buffer.write(markdown.encode("utf-8", "backslashreplace"))
-                        return
             except ValueError as error:
                 comparison_parser.error(str(error))
-            print(json.dumps(comparison, indent=2))
+            if markdown is not None:
+                sys.stdout.buffer.write(markdown.encode("utf-8", "backslashreplace"))
+            else:
+                print(json.dumps(comparison, indent=2))
             return
         if args.command == "report":
             stored_report = _require_report(args.db, args.task_id, parser)

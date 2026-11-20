@@ -4,7 +4,12 @@ import re
 from collections.abc import Mapping
 from html import escape
 
-from opspilot.report_comparison import EndpointObservation, HealthComparison
+from opspilot.report_comparison import (
+    EndpointChange,
+    EndpointObservation,
+    HealthComparison,
+    QueueComparison,
+)
 from opspilot.task_store import StoredReport
 
 _MARKDOWN = re.compile(r"([\\`*_\[\]|~])")
@@ -56,6 +61,52 @@ def _endpoint_observation(observation: EndpointObservation | None) -> str:
     return f"Outcome {_value(observation['outcome'])}, {details}"
 
 
+def _endpoint_change_lines(changes: list[EndpointChange]) -> list[str]:
+    if not changes:
+        return ["No changes in recorded endpoint observations."]
+    lines = [
+        "| Role | Endpoint | Occurrence | Baseline | Follow-up |",
+        "| --- | --- | ---: | --- | --- |",
+    ]
+    for change in changes:
+        lines.append(
+            f"| {change['role'].capitalize()} | {_value(change['source'])} | "
+            f"{change['occurrence']} | {_endpoint_observation(change['before'])} | "
+            f"{_endpoint_observation(change['after'])} |"
+        )
+    return lines
+
+
+def render_queue_comparison_markdown(comparison: QueueComparison) -> str:
+    lines = [
+        "# OpsPilot queue report comparison",
+        "",
+        f"- **Queue source** {_value(comparison['queue_source'])}",
+        f"- **Baseline task ID** {_value(comparison['before_task_id'])}",
+        f"- **Follow-up task ID** {_value(comparison['after_task_id'])}",
+        "",
+        "## Queue observation changes",
+        "",
+    ]
+    if comparison["changes"]:
+        lines.extend([
+            "| Observation | Baseline | Follow-up |",
+            "| --- | --- | --- |",
+        ])
+        for change in comparison["changes"]:
+            field = change["field"].removeprefix("queue.")
+            label = "Outcome" if field == "outcome" else _EVIDENCE_FIELDS.get(field, field)
+            lines.append(
+                f"| {_value(label)} | {_value(change['before'])} | {_value(change['after'])} |"
+            )
+    else:
+        lines.append("No changes in recorded queue observations.")
+    if "consumer_health_changes" in comparison:
+        lines.extend(["", "## Consumer endpoint changes", ""])
+        lines.extend(_endpoint_change_lines(comparison["consumer_health_changes"]))
+    return "\n".join(lines) + "\n"
+
+
 def render_health_comparison_markdown(comparison: HealthComparison) -> str:
     lines = [
         "# OpsPilot health report comparison",
@@ -65,19 +116,7 @@ def render_health_comparison_markdown(comparison: HealthComparison) -> str:
         f"- **Follow-up task ID** {_value(comparison['after_task_id'])}",
         "",
     ]
-    if comparison["changes"]:
-        lines.extend([
-            "| Role | Endpoint | Occurrence | Baseline | Follow-up |",
-            "| --- | --- | ---: | --- | --- |",
-        ])
-        for change in comparison["changes"]:
-            lines.append(
-                f"| {change['role'].capitalize()} | {_value(change['source'])} | "
-                f"{change['occurrence']} | {_endpoint_observation(change['before'])} | "
-                f"{_endpoint_observation(change['after'])} |"
-            )
-    else:
-        lines.append("No changes in recorded endpoint observations.")
+    lines.extend(_endpoint_change_lines(comparison["changes"]))
     return "\n".join(lines) + "\n"
 
 
