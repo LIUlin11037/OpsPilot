@@ -135,6 +135,7 @@ def test_live_queue_lifecycle(
     prefetch: int,
     diagnosis_status: str,
     live_processing_target,
+    processing_service,
 ) -> None:
     try:
         import pika
@@ -171,7 +172,13 @@ def test_live_queue_lifecycle(
             name,
         )
 
-        with TemporaryDirectory(prefix="opspilot-rabbitmq-live-") as directory:
+        health_status = 503
+        with (
+            TemporaryDirectory(prefix="opspilot-rabbitmq-live-") as directory,
+            processing_service(lambda _path: (health_status, b"")) as (fixture_url, health_requests),
+        ):
+            health_url = fixture_url.removesuffix("/processing") + "/health"
+            diagnosis_options = (*queue_options, "--consumer-health-url", health_url)
             _wait_for_snapshot(connector, (0, 0, 0))
             empty = _run_cli(directory, "inspect-queue", *queue_options)
             assert _snapshot(empty) == (0, 0, 0)
@@ -186,10 +193,19 @@ def test_live_queue_lifecycle(
 
             ready_snapshot = (MESSAGE_COUNT, 0, 0)
             _wait_for_snapshot(connector, ready_snapshot)
-            backlog = _run_cli(directory, "diagnose", *queue_options, "Check ready messages")
+            backlog = _run_cli(directory, "diagnose", *diagnosis_options, "Check ready messages")
             assert backlog["status"] == "undetermined"
-            assert _snapshot(backlog["evidence"][0]) == ready_snapshot
+            queue_evidence, health = backlog["evidence"]
+            assert _snapshot(queue_evidence) == ready_snapshot
+            assert health["tool"] == "inspect_consumer_endpoint"
+            assert health["source"] == health_url
+            assert health["health"] == "unhealthy" and health["http_status"] == 503
+            assert any(
+                check["action"] == "inspect_endpoint_logs" and check["evidence_index"] == 1
+                for check in backlog["next_checks"]
+            )
 
+            health_status = 204
             channel.basic_qos(prefetch_count=prefetch)
             channel.basic_consume(
                 queue=name, on_message_callback=lambda *_delivery: None, auto_ack=False
@@ -200,7 +216,7 @@ def test_live_queue_lifecycle(
                 delivered = _run_cli(
                     directory,
                     "diagnose",
-                    *queue_options,
+                    *diagnosis_options,
                     "--processing-url",
                     endpoint,
                     "--message-id",
@@ -209,8 +225,10 @@ def test_live_queue_lifecycle(
                 )
             assert delivered["status"] == diagnosis_status
             assert delivered["requested_message_id"] == "order-msg-101"
-            evidence, processing = delivered["evidence"]
-            assert _snapshot(evidence) == delivered_snapshot
+            queue_evidence, health, processing = delivered["evidence"]
+            assert _snapshot(queue_evidence) == delivered_snapshot
+            assert health["source"] == health_url
+            assert health["health"] == "healthy" and health["http_status"] == 204
             assert f"awaiting acknowledgement is {prefetch}" in delivered["conclusion"]
             assert delivered["processing_correlation"] == "unknown"
             assert processing["message_id"] == "order-msg-101"
@@ -225,9 +243,21 @@ def test_live_queue_lifecycle(
             }
             assert [call["tool"] for call in delivered["tool_calls"]] == [
                 "inspect_queue",
+                "inspect_consumer_endpoint",
                 "inspect_processing",
             ]
             assert all(call["outcome"] == "observed" for call in delivered["tool_calls"])
             assert all(call["duration_ms"] >= 0 for call in delivered["tool_calls"])
             saved = _run_cli(directory, "report", delivered["task_id"])
             assert saved == delivered
+
+            for remaining in range(MESSAGE_COUNT, 0, -prefetch):
+                in_flight = min(remaining, prefetch)
+                _wait_for_snapshot(connector, (remaining - in_flight, in_flight, 1))
+                channel.basic_ack(delivery_tag=0, multiple=True)
+            _wait_for_snapshot(connector, (0, 0, 1))
+            drained = _run_cli(directory, "diagnose", *diagnosis_options, "Check drained queue")
+            assert drained["status"] == "no_backlog_observed"
+            assert len(drained["evidence"]) == 1
+            assert _snapshot(drained["evidence"][0]) == (0, 0, 1)
+            assert health_requests == ["/health", "/health"]

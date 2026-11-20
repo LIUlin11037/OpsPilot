@@ -231,7 +231,7 @@ $env:OPSPILOT_RABBITMQ_PASSWORD = "opspilot_local_only"
 .\.venv\Scripts\python.exe -m pytest tests/test_rabbitmq_live.py --rabbitmq-live -q
 ```
 
-测试覆盖空队列、有待投递且无订阅、部分及全部消息已投递待确认、通过本地 HTTP 目标服务读取业务记录，以及按任务 ID 回看报告。每次测试使用 broker 生成的独占队列和临时 SQLite，结束时随连接和临时目录一起清理。
+测试覆盖空队列、有待投递且无订阅、部分及全部消息已投递待确认和队列清空。验收同时验证消费者健康端点从 `503` 恢复到 `204`、清空后跳过健康检查、读取业务记录及按任务 ID 回看报告。每次测试使用 broker 生成的独占队列和临时 SQLite，结束时随连接和临时目录一起清理。
 
 在同一套验收中使用 Java 目标服务时，加上 `--java-target`。
 
