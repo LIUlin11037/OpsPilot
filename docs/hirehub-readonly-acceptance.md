@@ -53,6 +53,8 @@
 
 `capture-hirehub` 适用于三个 HireHub schema 位于同一 MySQL 实例、业务时间以 UTC 写入的隔离环境。为 MySQL 账号授予上述四张证据表的 `SELECT` 权限，并为 RabbitMQ Management 账号授予读取通知队列的权限。通过环境变量提供 `OPSPILOT_MYSQL_USER`、`OPSPILOT_MYSQL_PASSWORD`、`OPSPILOT_RABBITMQ_USER` 和 `OPSPILOT_RABBITMQ_PASSWORD`。
 
+采集时，带时区的业务时间按原有时刻转为 UTC。无时区的业务时间按上述环境约定解释为 UTC。
+
 在 OpsPilot 根目录运行。将端口、虚拟主机、投递 ID 和预期 HR ID 换成隔离环境的实际值。
 
 ```powershell

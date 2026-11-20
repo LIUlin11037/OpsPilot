@@ -29,6 +29,13 @@ _CONSUME_LOGS = {
 }
 
 
+def _business_time_iso(value: datetime) -> str:
+    # HireHub live capture requires naive business timestamps to already be in UTC.
+    if value.utcoffset() is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
 def _read_mysql_section(
     mysql: MySQLConnector, query: str, parameters: tuple[int | str, ...]
 ) -> dict[str, Any]:
@@ -41,7 +48,7 @@ def _read_mysql_section(
     if read.outcome == "observed":
         section["rows"] = [
             {
-                field: value.replace(tzinfo=timezone.utc).isoformat()
+                field: _business_time_iso(value)
                 if isinstance(value, datetime)
                 else value
                 for field, value in row.items()

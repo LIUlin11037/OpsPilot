@@ -1,6 +1,7 @@
 """Evidence-driven workflow for the queue backlog case."""
 
 from collections.abc import Callable
+from datetime import datetime, timezone
 from functools import partial
 from operator import add
 from time import perf_counter_ns
@@ -49,6 +50,17 @@ class ProcessingEvidence(Observation):
     outcome: Literal["observed"]
     result: ProcessingResult
     message_id: str | None
+
+
+class EmptyProcessingEvidenceFields(Observation):
+    tool: Literal["inspect_processing"]
+    outcome: Literal["observed"]
+    row_count: Literal[0]
+    reason: Literal["record_not_found", "message_not_found"]
+
+
+class EmptyProcessingEvidence(EmptyProcessingEvidenceFields, total=False):
+    http_status: int
 
 
 class UnavailableEvidence(Observation):
@@ -104,8 +116,11 @@ class TraceEvidence(TraceEvidenceFields, total=False):
     registered_consumers: int | None
 
 
+ProcessingRead = ProcessingEvidence | EmptyProcessingEvidence | UnavailableEvidence
+
+
 Evidence = (
-    QueueEvidence | ConsumerEvidence | ProcessingEvidence | UnavailableEvidence |
+    QueueEvidence | ConsumerEvidence | ProcessingRead |
     TraceEvidence | HealthEvidence
 )
 
@@ -121,7 +136,24 @@ class QueueTool(Protocol):
 
 
 class HealthTool(Protocol):
+    @property
+    def endpoint(self) -> str: ...
+
     def inspect_health(self) -> HealthRead: ...
+
+
+def read_health(tool: HealthTool) -> HealthRead:
+    try:
+        return tool.inspect_health()
+    except OSError as error:
+        timed_out = isinstance(error, TimeoutError)
+        return {
+            "source": tool.endpoint,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "outcome": "timeout" if timed_out else "missing",
+            "health": "unknown",
+            "reason": "request_timeout" if timed_out else "transport_error",
+        }
 
 
 class DiagnosticTools(QueueTool, Protocol):
@@ -129,13 +161,13 @@ class DiagnosticTools(QueueTool, Protocol):
 
 
 class ProcessingTool(Protocol):
-    def inspect_processing(self) -> ProcessingEvidence | UnavailableEvidence: ...
+    def inspect_processing(self) -> ProcessingRead: ...
 
 
 class TargetProcessingTool(ProcessingTool, Protocol):
     def inspect_processing(
         self, *, message_id: str | None = None
-    ) -> ProcessingEvidence | UnavailableEvidence: ...
+    ) -> ProcessingRead: ...
 
 
 class DiagnosisReportFields(TypedDict):
@@ -237,7 +269,7 @@ class DiagnosisState(DiagnosisInput, total=False):
     queue: QueueEvidence | UnavailableQueueEvidence
     consumer: ConsumerEvidence | UnavailableEvidence
     consumer_health: HealthEvidence
-    processing: ProcessingEvidence | UnavailableEvidence
+    processing: ProcessingRead
     tool_calls: Annotated[list[ToolCall], add]
     report: DiagnosisReport
 
@@ -269,7 +301,7 @@ def _describe_failure(outcome: UnavailableOutcome) -> str:
 
 def _correlate_processing(
     queue: QueueEvidence | UnavailableQueueEvidence,
-    processing: ProcessingEvidence | UnavailableEvidence,
+    processing: ProcessingRead,
 ) -> ProcessingCorrelation:
     if queue["outcome"] != "observed" or processing["outcome"] != "observed":
         return "unknown"
@@ -323,7 +355,7 @@ def _conclude_queue_snapshot(
 
 
 def _processing_summary(
-    processing: ProcessingEvidence | UnavailableEvidence,
+    processing: ProcessingRead,
     correlation: ProcessingCorrelation | None,
     *,
     targeted: bool = False,
@@ -334,6 +366,9 @@ def _processing_summary(
             return f"Processing lookup for the requested message {failure}."
         return f"Processing inspection {failure}."
 
+    if processing.get("row_count") == 0:
+        scope = " for the requested message" if targeted else ""
+        return f"Processing lookup{scope} succeeded and returned zero matching records."
     subject = "The latest processing attempt"
     if targeted:
         subject = f"{subject} for the requested message"
@@ -441,7 +476,7 @@ def _inspect(
 
 
 def _read_consumer_health(tool: HealthTool) -> HealthEvidence:
-    return {**tool.inspect_health(), "tool": "inspect_consumer_endpoint"}
+    return {**read_health(tool), "tool": "inspect_consumer_endpoint"}
 
 
 def _queue_graph(tool: QueueTool) -> StateGraph:
@@ -454,7 +489,7 @@ def _queue_graph(tool: QueueTool) -> StateGraph:
 
 
 def _add_processing_node(
-    graph: StateGraph, inspect: Callable[[], ProcessingEvidence | UnavailableEvidence]
+    graph: StateGraph, inspect: Callable[[], ProcessingRead]
 ) -> None:
     graph.add_node(
         "inspect_processing", partial(_inspect, "processing", inspect)

@@ -1,6 +1,6 @@
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -52,7 +52,7 @@ def test_hirehub_cli_live_reads_produce_diagnosable_evidence(
         if "hirehub_job.mq_consume_log" in query:
             return MySQLRead("observed", OBSERVED_AT, ({
                 "message_id": MESSAGE_ID, "consumer": "job-delivery-count",
-                "recorded_at": datetime(2026, 11, 19, 5, 59),
+                "recorded_at": datetime(2026, 11, 19, 13, 59, tzinfo=timezone(timedelta(hours=8))),
             },))
         assert "hirehub_notification.mq_consume_log" in query
         if notification_outcome == "missing":
@@ -118,6 +118,7 @@ def test_hirehub_cli_live_reads_produce_diagnosable_evidence(
     )
     assert checks["outbox"]["expected_recipient_listed"] is False
     assert checks["outbox"]["sent_at"] == "2026-11-19T05:59:00+00:00"
+    assert checks["job"]["recorded_at"] == checks["outbox"]["sent_at"]
     assert ("row_count" in checks["notification"]) == (notification_outcome == "observed")
     if notification_outcome == "missing":
         assert checks["notification"]["reason"] == "access_denied"

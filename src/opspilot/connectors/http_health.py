@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from http.client import HTTPConnection, HTTPException, HTTPSConnection
 from math import isfinite
 from typing import Literal
-from urllib.parse import SplitResult, urlsplit
+from urllib.parse import SplitResult, quote, urlsplit
 
 from opspilot.core.diagnosis import HealthRead
 
@@ -33,7 +33,8 @@ class HttpHealthConnector:
             raise ValueError("Health URL port must be positive.")
         if not isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:
             raise ValueError("Timeout must be a finite positive number.")
-        object.__setattr__(self, "_url", url)
+        path = quote(url.path or "/", safe="/%:@!$&'()*+,;=")
+        object.__setattr__(self, "_url", url._replace(path=path))
 
     def inspect_health(self) -> HealthRead:
         url = self._url
@@ -41,15 +42,15 @@ class HttpHealthConnector:
         connection = connection_type(url.hostname, url.port, timeout=self.timeout_seconds)
         try:
             with closing(connection):
-                connection.request("GET", url.path or "/")
+                connection.request("GET", url.path)
                 with connection.getresponse() as response:
                     status = response.status
         except TimeoutError:
             return self._unavailable("request_timeout")
         except (OSError, HTTPException):
             return self._unavailable("transport_error")
-        except OverflowError as error:
-            raise ValueError("Timeout exceeds socket limits.") from error
+        except OverflowError:
+            return self._unavailable("invalid_timeout")
 
         if 200 <= status < 300:
             return self._observed(status, "healthy")

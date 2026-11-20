@@ -76,7 +76,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m opspilot compare-http "BEFORE_TASK_ID" "AFTER_TASK_ID" --format markdown
 ```
 
-Markdown 表格并排显示基准和复查观测，包括健康状态、HTTP 状态码和失败原因。默认输出 JSON，`changes` 列出变化的端点观测。任一侧缺少观测时，Markdown 显示 `No observation recorded`，JSON 以 `null` 表示。相同角色和 URL 的重复检查按 `occurrence` 从 1 开始匹配。
+Markdown 表格并排显示基准和复查观测，包括健康状态、HTTP 状态码、失败原因以及已记录的 MySQL 错误码。默认输出 JSON，`changes` 列出变化的端点观测。任一侧缺少观测时，Markdown 显示 `No observation recorded`，JSON 以 `null` 表示。相同角色和 URL 的重复检查按 `occurrence` 从 1 开始匹配。
 
 ## 模拟诊断
 
@@ -210,7 +210,7 @@ $queueSource = "http://127.0.0.1:15672/api/queues/%2F/orders"
 .\.venv\Scripts\python.exe -m opspilot diagnose --management-url http://127.0.0.1:15672 --queue "orders" --processing-record "processing.json" --message-id "order-msg-101" "查这条消息的处理结果"
 ```
 
-指定 ID 时，报告会保存 `requested_message_id`。查询在对应队列和虚拟主机内精确匹配 ID，选取 `attempted_at` 最新的一次尝试。同一时间的多条记录取文件位置靠后的记录。目标范围内查无该 ID 时，证据标为 `message_not_found`。文件缺失、内容无效或目标不匹配也有对应的不可用原因。
+指定 ID 时，报告会保存 `requested_message_id`。查询在对应队列和虚拟主机内精确匹配 ID，选取 `attempted_at` 最新的一次尝试。同一时间的多条记录取文件位置靠后的记录。读取成功但没有匹配时，证据记为 `observed`，并保留 `row_count: 0`。指定 ID 时原因是 `message_not_found`。文件缺失记为 `missing`，原因为 `record_file_missing`。内容无效或目标不匹配各有对应的不可用原因。
 
 RabbitMQ 队列指标的消息 ID 样本为空，因此报告的队列消息关联仍标为 `unknown`。
 
@@ -222,7 +222,7 @@ RabbitMQ 队列指标的消息 ID 样本为空，因此报告的队列消息关�
 .\.venv\Scripts\python.exe -m opspilot diagnose --management-url http://127.0.0.1:15672 --queue "orders" --processing-url http://127.0.0.1:8080/processing --message-id "order-msg-101" "查这条消息的处理结果"
 ```
 
-OpsPilot 向指定端点发送只读 GET，请求参数为 `queue`、`vhost`，以及用户指定时的 `message_id`。端点使用 HTTP 200 返回上述单条 JSON 记录或记录数组，查不到记录时返回 404 或空数组。OpsPilot 还会校验响应中的队列、虚拟主机和消息 ID。HTTP 错误、超时和无效响应会作为不可用证据写入报告。当前适配器直接访问无需凭据的测试端点。
+OpsPilot 向指定端点发送只读 GET，请求参数为 `queue`、`vhost`，以及用户指定时的 `message_id`。端点使用 HTTP 200 返回上述单条 JSON 记录或记录数组，查询成功但无匹配时返回 HTTP 200 和空数组。OpsPilot 校验返回记录的队列、虚拟主机和消息 ID。HTTP 404、超时和无效响应会作为不可用证据写入报告。当前适配器直接访问无需凭据的测试端点。
 
 ### Java 目标服务示例
 

@@ -7,6 +7,7 @@ from time import sleep
 
 import pytest
 
+from opspilot.__main__ import main
 from opspilot.connectors.http_health import HttpHealthConnector
 from opspilot.connectors.mysql import MySQLConnector, MySQLRead
 from opspilot.health_config import HealthConfig, load_health_config
@@ -141,6 +142,45 @@ def test_health_connector_distinguishes_socket_timeout(processing_service) -> No
     assert "http_status" not in evidence
 
 
+def test_health_cli_preserves_all_observations_when_a_dependency_raises(
+    processing_service, monkeypatch, capsys,
+) -> None:
+    original = HttpHealthConnector.inspect_health
+
+    def inspect_health(self):
+        if self.endpoint.endswith("/offline"):
+            raise ConnectionResetError("audit fixture")
+        return original(self)
+
+    def respond(path):
+        return (503 if path == "/service" else 204), b""
+
+    monkeypatch.setattr(HttpHealthConnector, "inspect_health", inspect_health)
+    with TemporaryDirectory(prefix="opspilot-partial-health-") as directory:
+        database = Path(directory) / "reports.sqlite3"
+        with processing_service(respond) as (endpoint, requests):
+            base = endpoint.rsplit("/", 1)[0]
+            monkeypatch.setattr(sys, "argv", [
+                "opspilot", "--db", str(database), "diagnose-http",
+                "--service-url", f"{base}/service", "--dependency-url", f"{base}/offline",
+                "--dependency-url", f"{base}/健康/%2F", "Check service",
+            ])
+            main()
+
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        report = json.loads(captured.out)
+        assert requests == ["/service", "/%E5%81%A5%E5%BA%B7/%2F"]
+        assert [item["outcome"] for item in report["tool_calls"]] == ["observed", "missing", "observed"]
+        service, offline, later = report["evidence"]
+        assert service["http_status"] == 503
+        assert offline["source"] == f"{base}/offline"
+        assert offline["reason"] == "transport_error" and offline["health"] == "unknown"
+        assert later["http_status"] == 204 and later["source"] == f"{base}/健康/%2F"
+        stored = _cli(directory, "--db", str(database), "report", report["task_id"])
+        assert stored.returncode == 0 and json.loads(stored.stdout) == report
+
+
 def test_invalid_health_url_does_not_create_report_store() -> None:
     with TemporaryDirectory(prefix="opspilot-health-invalid-") as directory:
         result = _cli(
@@ -193,8 +233,6 @@ def test_health_cli_rejects_mixed_configuration_and_cli_options() -> None:
 def test_health_cli_checks_mysql_after_service_anomaly_or_when_requested(
     monkeypatch, capsys, processing_service, service_status, from_config, check_dependencies,
 ) -> None:
-    from opspilot.__main__ import main
-
     queries = []
 
     def select(self, query, parameters):

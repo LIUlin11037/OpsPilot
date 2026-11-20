@@ -286,6 +286,31 @@ def test_compare_http_renders_markdown_with_missing_observations(saved_health_pa
     assert database.read_bytes() == original
 
 
+def test_compare_http_detects_a_change_in_mysql_error_code(saved_health_pair) -> None:
+    database, before, _ = saved_health_pair
+    mysql: HealthEvidence = {
+        "tool": "inspect_dependency_health", "source": "mysql://127.0.0.1:3306",
+        "observed_at": "2026-11-20T06:00:00+00:00", "outcome": "missing",
+        "health": "unknown", "reason": "transport_error", "mysql_error_code": 2003,
+    }
+    before = save_report(database, {**before, "evidence": [before["evidence"][0], mysql]})
+    after = save_report(database, {
+        **before, "evidence": [before["evidence"][0], {**mysql, "mysql_error_code": 2013}],
+    })
+    ids = (before["task_id"], after["task_id"])
+
+    result = _compare(database, "compare-http", *ids)
+    assert result.returncode == 0, result.stderr
+    change, = json.loads(result.stdout)["changes"]
+    assert change["before"]["mysql_error_code"] == 2003
+    assert change["after"]["mysql_error_code"] == 2013
+
+    markdown = _compare(database, "compare-http", *ids, "--format", "markdown")
+    assert markdown.returncode == 0, markdown.stderr
+    assert "MySQL error code 2003" in markdown.stdout
+    assert "MySQL error code 2013" in markdown.stdout
+
+
 def test_compare_http_latest_selects_reports_for_the_main_service(saved_health_pair) -> None:
     database, before, after = saved_health_pair
     latest = save_report(database, deepcopy(before))

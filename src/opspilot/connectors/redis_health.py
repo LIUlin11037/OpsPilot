@@ -51,8 +51,8 @@ class RedisHealthConnector:
             return self._unavailable("request_timeout")
         except OSError:
             return self._unavailable("transport_error")
-        except OverflowError as error:
-            raise ValueError("Timeout exceeds socket limits.") from error
+        except OverflowError:
+            return self._unavailable("invalid_timeout")
 
         if reply == b"+PONG\r\n":
             return {

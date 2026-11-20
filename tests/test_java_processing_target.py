@@ -38,7 +38,8 @@ def test_java_target_implements_processing_contract(
     assert requested["message_id"] == "order-msg-101"
     assert requested["result"] == "failed"
     assert requested["attempted_at"] == "2026-11-19T03:00:00+00:00"
-    assert missing["outcome"] == "missing"
+    assert missing["outcome"] == "observed"
+    assert missing["row_count"] == 0
     assert missing["reason"] == "message_not_found"
     assert wrong_target["outcome"] == "missing"
     assert wrong_target["http_status"] == 404

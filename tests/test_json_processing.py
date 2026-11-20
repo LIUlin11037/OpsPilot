@@ -28,10 +28,21 @@ def test_reads_utf8_json_processing_record() -> None:
     assert evidence["attempted_at"] == "2026-11-19T03:00:00+00:00"
 
 
+def test_empty_processing_file_reports_zero_matching_records() -> None:
+    with TemporaryDirectory(prefix="opspilot-record-test-") as directory:
+        path = Path(directory) / "processing.json"
+        path.write_text("[]", encoding="utf-8")
+        evidence = JsonProcessingAdapter(path, "orders", "/").inspect_processing()
+
+    assert evidence["outcome"] == "observed"
+    assert evidence["row_count"] == 0
+    assert evidence["reason"] == "record_not_found"
+
+
 @pytest.mark.parametrize(
     ("contents", "reason"),
     [
-        (None, "record_not_found"),
+        (None, "record_file_missing"),
         ("{", "invalid_record"),
         (json.dumps({**RECORD, "result": "unknown"}), "invalid_record"),
         (json.dumps({**RECORD, "attempted_at": "2026-11-19T03:00:00"}), "invalid_record"),
@@ -78,7 +89,8 @@ def test_selects_latest_attempt_within_queue_and_exact_message_id(
         )
 
     if expected_id is None:
-        assert evidence["outcome"] == "missing"
+        assert evidence["outcome"] == "observed"
+        assert evidence["row_count"] == 0
         assert evidence["reason"] == "message_not_found"
     else:
         assert evidence["outcome"] == "observed"

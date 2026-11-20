@@ -14,6 +14,7 @@ from opspilot.core.diagnosis import (
     HealthTool,
     ToolCall,
     measure_tool_call,
+    read_health,
     suggest_next_checks,
 )
 
@@ -29,7 +30,7 @@ class _HealthState(TypedDict, total=False):
 def _inspect(
     tool: HealthTool, name: Literal["inspect_service_health", "inspect_dependency_health"]
 ) -> tuple[HealthEvidence, ToolCall]:
-    read, duration_ms = measure_tool_call(tool.inspect_health)
+    read, duration_ms = measure_tool_call(partial(read_health, tool))
     evidence: HealthEvidence = {**read, "tool": name}
     call: ToolCall = {"tool": name, "outcome": read["outcome"], "duration_ms": duration_ms}
     return evidence, call

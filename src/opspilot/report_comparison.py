@@ -36,11 +36,15 @@ _HTTP_HEALTH_ROLES: dict[str, HealthRole] = {
 _CONSUMER_HEALTH_ROLES: dict[str, HealthRole] = {"inspect_consumer_endpoint": "consumer"}
 
 
-class EndpointObservation(TypedDict):
+class EndpointObservationFields(TypedDict):
     health: str
     outcome: ObservationOutcome
     http_status: int | None
     reason: str | None
+
+
+class EndpointObservation(EndpointObservationFields, total=False):
+    mysql_error_code: int
 
 
 EndpointObservations = dict[tuple[HealthRole, str, int], EndpointObservation]
@@ -187,12 +191,15 @@ def _endpoint_observations(
         key = (role, source)
         occurrence = counts.get(key, 0) + 1
         counts[key] = occurrence
-        observations[(role, source, occurrence)] = {
+        observation: EndpointObservation = {
             "health": item["health"],
             "outcome": item["outcome"],
             "http_status": item.get("http_status"),
             "reason": item.get("reason"),
         }
+        if item.get("mysql_error_code") is not None:
+            observation["mysql_error_code"] = item["mysql_error_code"]
+        observations[(role, source, occurrence)] = observation
     return observations
 
 

@@ -4,9 +4,15 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
 
-from opspilot.core.diagnosis import ProcessingEvidence, ProcessingResult, UnavailableEvidence
+from opspilot.core.diagnosis import (
+    EmptyProcessingEvidence,
+    ProcessingEvidence,
+    ProcessingResult,
+    UnavailableEvidence,
+)
 
 ProcessingFailure = Literal[
+    "record_file_missing",
     "record_not_found",
     "record_unreadable",
     "invalid_record",
@@ -97,7 +103,7 @@ def select_processing_evidence(
     queue: str,
     vhost: str,
     message_id: str | None = None,
-) -> ProcessingRecordEvidence | UnavailableProcessingEvidence:
+) -> ProcessingRecordEvidence | EmptyProcessingEvidence | UnavailableProcessingEvidence:
     entries = payload if isinstance(payload, list) else [payload]
     scoped: list[_ProcessingRecord] = []
     for entry in entries:
@@ -113,8 +119,14 @@ def select_processing_evidence(
     if message_id is not None:
         matches = [record for record in scoped if record.message_id == message_id]
     if not matches:
-        reason = "record_not_found" if message_id is None else "message_not_found"
-        return unavailable_processing(source, reason)
+        return {
+            "tool": "inspect_processing",
+            "source": source,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "outcome": "observed",
+            "row_count": 0,
+            "reason": "record_not_found" if message_id is None else "message_not_found",
+        }
 
     latest = max(reversed(matches), key=lambda record: record.attempted_at)
     return {

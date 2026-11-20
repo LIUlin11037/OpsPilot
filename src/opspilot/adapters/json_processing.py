@@ -10,6 +10,7 @@ from opspilot.adapters.processing_records import (
     select_processing_evidence,
     unavailable_processing,
 )
+from opspilot.core.diagnosis import EmptyProcessingEvidence
 
 
 @dataclass(frozen=True)
@@ -20,12 +21,12 @@ class JsonProcessingAdapter:
 
     def inspect_processing(
         self, *, message_id: str | None = None
-    ) -> ProcessingRecordEvidence | UnavailableProcessingEvidence:
+    ) -> ProcessingRecordEvidence | EmptyProcessingEvidence | UnavailableProcessingEvidence:
         source = self.path.absolute().as_uri()
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8-sig"))
         except FileNotFoundError:
-            return unavailable_processing(source, "record_not_found")
+            return unavailable_processing(source, "record_file_missing")
         except OSError:
             return unavailable_processing(source, "record_unreadable")
         except (UnicodeError, json.JSONDecodeError):

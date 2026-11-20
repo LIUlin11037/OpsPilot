@@ -67,7 +67,11 @@ def test_http_processing_retains_unavailable_reasons(
         adapter = HttpProcessingAdapter(endpoint, RECORD["queue"], RECORD["vhost"])
         evidence = adapter.inspect_processing(message_id=message_id)
 
-    assert evidence["outcome"] == "missing"
+    if status == 200 and body == b"[]":
+        assert evidence["outcome"] == "observed"
+        assert evidence["row_count"] == 0
+    else:
+        assert evidence["outcome"] == "missing"
     assert evidence["reason"] == reason
     assert evidence["http_status"] == status
     assert "result" not in evidence

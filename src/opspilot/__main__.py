@@ -5,6 +5,8 @@ import json
 import os
 import sqlite3
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from opspilot.adapters.hirehub_capture import HireHubLiveAdapter
@@ -124,8 +126,17 @@ def _hirehub_live_adapter(
     return HireHubLiveAdapter(mysql, queue, environment, args.recipient_id)
 
 
+@contextmanager
+def _report_storage_errors(parser: argparse.ArgumentParser) -> Iterator[None]:
+    try:
+        yield
+    except (OSError, sqlite3.Error, json.JSONDecodeError) as error:
+        parser.exit(1, f"opspilot: report storage error: {error}\n")
+
+
 def _require_report(database: Path, task_id: str, parser: argparse.ArgumentParser) -> StoredReport:
-    report = load_report(database, task_id)
+    with _report_storage_errors(parser):
+        report = load_report(database, task_id)
     if report is None:
         parser.exit(1, f"opspilot: no report found for task {task_id}\n")
     return report
@@ -137,13 +148,15 @@ def _latest_comparison_task_ids(
     if args.command == "compare-http-latest":
         if not args.service_url.strip():
             parser.error("--service-url must not be empty")
-        reports = list_reports(args.db, limit=2, service_url=args.service_url)
+        filters = {"service_url": args.service_url}
         scope = "health reports for the requested service URL"
     else:
         if not args.queue_source.strip():
             parser.error("--queue-source must not be empty")
-        reports = list_reports(args.db, limit=2, queue_source=args.queue_source)
+        filters = {"queue_source": args.queue_source}
         scope = "queue reports for the requested queue source"
+    with _report_storage_errors(parser):
+        reports = list_reports(args.db, limit=2, **filters)
     if len(reports) < 2:
         parser.exit(1, f"opspilot: fewer than two saved {scope}\n")
     follow_up, baseline = reports
@@ -351,10 +364,11 @@ def main() -> None:
                 reports_command.error("--service-url must not be empty")
             if args.queue_source is not None and not args.queue_source.strip():
                 reports_command.error("--queue-source must not be empty")
-            summaries = list_reports(
-                args.db, limit=args.limit, delivery_id=args.delivery_id, environment=environment,
-                service_url=args.service_url, queue_source=args.queue_source,
-            )
+            with _report_storage_errors(parser):
+                summaries = list_reports(
+                    args.db, limit=args.limit, delivery_id=args.delivery_id, environment=environment,
+                    service_url=args.service_url, queue_source=args.queue_source,
+                )
             print(json.dumps(summaries, indent=2))
             return
         if args.command in report_comparisons:
@@ -413,7 +427,6 @@ def main() -> None:
                 )
             except ValueError as error:
                 health.error(str(error))
-            stored_report = save_report(args.db, report)
         elif args.command == "diagnose-hirehub":
             question = args.question.strip()
             if not question:
@@ -433,7 +446,6 @@ def main() -> None:
                 report = run_target_trace(question, args.delivery_id, target)
             except ValueError as error:
                 hirehub.error(str(error))
-            stored_report = save_report(args.db, report)
         else:
             question = args.question.strip()
             if not question:
@@ -466,9 +478,12 @@ def main() -> None:
                     diagnose.error("--queue, --vhost, and --timeout require --management-url")
                 simulated_queue, adapter = scenarios[args.scenario]
                 report = run_diagnosis(question, simulated_queue, adapter)
+    except OSError as error:
+        parser.exit(1, f"opspilot: diagnosis error: {error}\n")
+
+    if args.command != "report":
+        with _report_storage_errors(parser):
             stored_report = save_report(args.db, report)
-    except (OSError, sqlite3.Error, json.JSONDecodeError) as error:
-        parser.exit(1, f"opspilot: report storage error: {error}\n")
 
     if args.command == "report" and args.format == "markdown":
         sys.stdout.buffer.write(render_markdown(stored_report).encode("utf-8", "backslashreplace"))

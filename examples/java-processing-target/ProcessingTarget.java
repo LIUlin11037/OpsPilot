@@ -81,7 +81,7 @@ public class ProcessingTarget {
             String body = matches.stream()
                 .map(attempt -> attempt.toJson(queue, vhost))
                 .collect(Collectors.joining(",", "[", "]"));
-            sendJson(exchange, matches.isEmpty() ? 404 : 200, body);
+            sendJson(exchange, 200, body);
         }
     }
 

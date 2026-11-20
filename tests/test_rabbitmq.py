@@ -350,7 +350,7 @@ def test_rabbitmq_diagnosis_reads_record_only_for_observed_queue_activity(
         assert report["processing_correlation"] is None
     elif pending is not None and pending > 0:
         assert report["processing_correlation"] == "unknown"
-        assert report["evidence"][1]["reason"] == "record_not_found"
+        assert report["evidence"][1]["reason"] == "record_file_missing"
     elif unacknowledged > 0:
         assert report["status"] == ("undetermined" if pending is None else "no_backlog_observed")
         assert report["processing_correlation"] == "unknown"
@@ -490,6 +490,11 @@ def test_requested_message_is_checked_independently_of_queue_activity(
         assert processing["message_id"] == message_id
         assert "for the requested message succeeded." in report["conclusion"]
     else:
-        assert processing["outcome"] == "missing"
+        assert processing["outcome"] == "observed"
+        assert processing["row_count"] == 0
         assert processing["reason"] == "message_not_found"
-        assert "lookup for the requested message returned no data." in report["conclusion"]
+        assert "lookup for the requested message succeeded and returned zero matching records." in report["conclusion"]
+        assert any(
+            check["evidence_index"] == 1 and check["action"] == "verify_lookup"
+            for check in report["next_checks"]
+        )

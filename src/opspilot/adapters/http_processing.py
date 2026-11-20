@@ -14,6 +14,7 @@ from opspilot.adapters.processing_records import (
     select_processing_evidence,
     unavailable_processing,
 )
+from opspilot.core.diagnosis import EmptyProcessingEvidence
 
 _HTTP_FAILURES: dict[int, ProcessingFailure] = {
     401: "authentication_failed",
@@ -49,7 +50,7 @@ class HttpProcessingAdapter:
 
     def inspect_processing(
         self, *, message_id: str | None = None
-    ) -> ProcessingRecordEvidence | UnavailableProcessingEvidence:
+    ) -> ProcessingRecordEvidence | EmptyProcessingEvidence | UnavailableProcessingEvidence:
         parameters = {"queue": self.queue, "vhost": self.vhost}
         if message_id is not None:
             parameters["message_id"] = message_id
@@ -85,6 +86,6 @@ class HttpProcessingAdapter:
         evidence = select_processing_evidence(
             payload, source=source, queue=self.queue, vhost=self.vhost, message_id=message_id
         )
-        if evidence["outcome"] != "observed":
+        if evidence["outcome"] != "observed" or evidence.get("row_count") == 0:
             evidence["http_status"] = status
         return evidence
