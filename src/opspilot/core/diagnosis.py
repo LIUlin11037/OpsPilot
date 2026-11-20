@@ -158,6 +158,7 @@ NextCheckAction = Literal[
     "verify_read_access",
     "verify_source",
     "verify_lookup",
+    "inspect_endpoint_logs",
     "inspect_consumer_health",
     "inspect_processing_logs",
 ]
@@ -181,6 +182,7 @@ _NEXT_CHECK_DESCRIPTIONS: dict[NextCheckAction, str] = {
     "verify_read_access": "Verify that the configured read-only account can access this source.",
     "verify_source": "Verify the configured source and its availability before repeating the read.",
     "verify_lookup": "Verify the lookup keys and expected scope, then inspect the matching records.",
+    "inspect_endpoint_logs": "Read request and error logs for this endpoint around the observation time.",
     "inspect_consumer_health": "Read the consumer service health and recent subscription logs.",
     "inspect_processing_logs": "Read logs for the observed processing attempt to verify its error and message ID.",
 }
@@ -193,6 +195,8 @@ def _next_check_action(evidence: Evidence) -> NextCheckAction | None:
         if evidence.get("reason") in ("access_denied", "authentication_failed"):
             return "verify_read_access"
         return "verify_source"
+    if evidence.get("health") == "unhealthy":
+        return "inspect_endpoint_logs"
     if evidence.get("reason") == "ambiguous_rows":
         return "verify_lookup"
     if evidence.get("row_count") == 0:

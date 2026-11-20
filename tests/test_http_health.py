@@ -78,18 +78,22 @@ def test_health_cli_chooses_read_only_checks_and_saves_report(
             assert markdown.returncode == 0, markdown.stderr
             assert "Health unhealthy, HTTP status 503" in markdown.stdout
             assert "Health healthy, HTTP status 204" in markdown.stdout
+            assert (
+                f"- **Service endpoint {base}/service/health** Read request and error logs"
+                in markdown.stdout
+            )
 
 
 @pytest.mark.parametrize(
-    ("dependency_status", "dependency_health", "expected_status"),
+    ("dependency_status", "dependency_health", "expected_status", "expected_action"),
     [
-        (503, "unhealthy", "undetermined"),
-        (403, "unknown", "undetermined"),
-        (204, "healthy", "no_failure_observed"),
+        (503, "unhealthy", "undetermined", "inspect_endpoint_logs"),
+        (403, "unknown", "undetermined", "verify_read_access"),
+        (204, "healthy", "no_failure_observed", None),
     ],
 )
 def test_health_cli_checks_dependencies_when_service_is_healthy(
-    processing_service, dependency_status, dependency_health, expected_status,
+    processing_service, dependency_status, dependency_health, expected_status, expected_action,
 ) -> None:
     def respond(path):
         status = 204 if path == "/service/health" else dependency_status
@@ -103,15 +107,25 @@ def test_health_cli_checks_dependencies_when_service_is_healthy(
                 "--dependency-url", f"{base}/dependency/health", "--check-dependencies",
                 "Recheck dependencies",
             )
+        assert result.returncode == 0, result.stderr
+        report = json.loads(result.stdout)
+        if dependency_health == "unhealthy":
+            markdown = _cli(directory, "report", report["task_id"], "--format", "markdown")
+            assert markdown.returncode == 0, markdown.stderr
+            assert (
+                f"- **Dependency endpoint {base}/dependency/health** Read request and error logs"
+                in markdown.stdout
+            )
 
-    assert result.returncode == 0, result.stderr
     assert requests == ["/service/health", "/dependency/health"]
-    report = json.loads(result.stdout)
     service, dependency = report["evidence"]
     assert service["health"] == "healthy"
     assert dependency["health"] == dependency_health
     assert dependency["http_status"] == dependency_status
     assert report["status"] == expected_status
+    assert [(check["evidence_index"], check["action"]) for check in report["next_checks"]] == (
+        [] if expected_action is None else [(1, expected_action)]
+    )
 
 
 def test_health_connector_distinguishes_socket_timeout(processing_service) -> None:

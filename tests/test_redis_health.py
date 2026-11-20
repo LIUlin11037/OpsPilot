@@ -157,7 +157,9 @@ def test_http_diagnosis_can_read_multiple_mixed_dependencies(
     ] == [
         (item["tool"], item["outcome"]) for item in report["evidence"]
     ]
-    assert [check["evidence_index"] for check in report["next_checks"]] == [1, 3]
+    assert [(check["evidence_index"], check["action"]) for check in report["next_checks"]] == [
+        (0, "inspect_endpoint_logs"), (1, "verify_read_access"), (3, "verify_read_access"),
+    ]
     assert all(url in report["conclusion"] for url in (denied_url, healthy_url, redis_denied, redis_healthy))
 
 

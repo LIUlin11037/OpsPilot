@@ -25,6 +25,8 @@ python -m venv .venv
 
 运行 `python -m pytest tests/test_http_health.py -q` 可用自动启停的本地 HTTP 服务复跑这条诊断流程。
 
+主服务或依赖端点返回 `5xx` 时，报告会建议查看该端点在观测时间附近的请求日志和错误日志。Markdown 报告会在建议旁标明端点 URL，便于区分多个依赖。
+
 依赖是 Redis 时，可指定一个允许直接执行 `PING` 的 `redis://HOST[:PORT]` 端点。收到 `PONG` 时记录 Redis 端点可响应。超时、认证拒绝和异常响应记为 `unknown`。 [Redis PING 文档](https://redis.io/docs/latest/commands/ping/)
 
 ```powershell

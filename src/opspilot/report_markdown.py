@@ -114,7 +114,13 @@ def render_markdown(report: StoredReport) -> str:
         lines.extend(["", "## Suggested read-only checks", ""])
         for check in report["next_checks"]:
             item = report["evidence"][check["evidence_index"]]
-            label = item.get("checkpoint", item["tool"])
+            tool = item["tool"]
+            if tool == "inspect_service_health":
+                label = f"Service endpoint {item['source']}"
+            elif tool == "inspect_dependency_health":
+                label = f"Dependency endpoint {item['source']}"
+            else:
+                label = item.get("checkpoint", tool)
             lines.append(f"- **{_value(label)}** {_value(check['description'])}")
 
     lines.extend(["", "## Evidence", ""])
