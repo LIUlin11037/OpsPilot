@@ -214,6 +214,10 @@ def main() -> None:
         "--mysql-dependency-url", action="append", default=[], help="MySQL dependency URL. Repeatable."
     )
     health.add_argument(
+        "--check-dependencies", action="store_true",
+        help="Check configured dependencies even when the service is healthy.",
+    )
+    health.add_argument(
         "--timeout", type=float, metavar="SECONDS", help="Socket timeout (default: 5)."
     )
     health.add_argument("question", help="Incident description.")
@@ -330,7 +334,9 @@ def main() -> None:
                         MySQLHealthConnector(url, username, password, config.timeout_seconds)
                         for url in config.mysql_dependency_urls
                     )
-                report = run_health_diagnosis(question, service, dependencies)
+                report = run_health_diagnosis(
+                    question, service, dependencies, check_dependencies=args.check_dependencies,
+                )
             except ValueError as error:
                 health.error(str(error))
             stored_report = save_report(args.db, report)

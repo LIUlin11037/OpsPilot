@@ -80,6 +80,40 @@ def test_health_cli_chooses_read_only_checks_and_saves_report(
             assert "Health healthy, HTTP status 204" in markdown.stdout
 
 
+@pytest.mark.parametrize(
+    ("dependency_status", "dependency_health", "expected_status"),
+    [
+        (503, "unhealthy", "undetermined"),
+        (403, "unknown", "undetermined"),
+        (204, "healthy", "no_failure_observed"),
+    ],
+)
+def test_health_cli_checks_dependencies_when_service_is_healthy(
+    processing_service, dependency_status, dependency_health, expected_status,
+) -> None:
+    def respond(path):
+        status = 204 if path == "/service/health" else dependency_status
+        return status, b""
+
+    with TemporaryDirectory(prefix="opspilot-health-test-") as directory:
+        with processing_service(respond) as (endpoint, requests):
+            base = endpoint.rsplit("/", 1)[0]
+            result = _cli(
+                directory, "diagnose-http", "--service-url", f"{base}/service/health",
+                "--dependency-url", f"{base}/dependency/health", "--check-dependencies",
+                "Recheck dependencies",
+            )
+
+    assert result.returncode == 0, result.stderr
+    assert requests == ["/service/health", "/dependency/health"]
+    report = json.loads(result.stdout)
+    service, dependency = report["evidence"]
+    assert service["health"] == "healthy"
+    assert dependency["health"] == dependency_health
+    assert dependency["http_status"] == dependency_status
+    assert report["status"] == expected_status
+
+
 def test_health_connector_distinguishes_socket_timeout(processing_service) -> None:
     def respond(path):
         sleep(.2)
@@ -139,10 +173,11 @@ def test_health_cli_rejects_mixed_configuration_and_cli_options() -> None:
 
 
 @pytest.mark.parametrize(
-    ("service_status", "from_config"), [(204, False), (503, False), (503, True)]
+    ("service_status", "from_config", "check_dependencies"),
+    [(204, False, False), (503, False, False), (503, True, False), (204, True, True)],
 )
-def test_health_cli_uses_mysql_only_after_anomaly(
-    monkeypatch, capsys, processing_service, service_status, from_config,
+def test_health_cli_checks_mysql_after_service_anomaly_or_when_requested(
+    monkeypatch, capsys, processing_service, service_status, from_config, check_dependencies,
 ) -> None:
     from opspilot.__main__ import main
 
@@ -168,6 +203,8 @@ def test_health_cli_uses_mysql_only_after_anomaly(
                 options = ["--config", str(config)]
             else:
                 options = ["--service-url", url, "--mysql-dependency-url", mysql_url]
+            if check_dependencies:
+                options.append("--check-dependencies")
             monkeypatch.setattr(sys, "argv", [
                 "opspilot", "--db", str(database), "diagnose-http", *options, "Check database",
             ])
@@ -177,11 +214,13 @@ def test_health_cli_uses_mysql_only_after_anomaly(
     assert requests == ["/processing"]
     assert "ephemeral-secret" not in output
     report = json.loads(output)
-    if service_status == 204:
+    if service_status == 204 and not check_dependencies:
         assert queries == []
         assert len(report["evidence"]) == 1
     else:
         assert queries == [("SELECT 1 AS ok", ())]
-        assert report["status"] == "undetermined"
+        assert report["status"] == (
+            "no_failure_observed" if service_status == 204 else "undetermined"
+        )
         assert report["evidence"][1]["source"] == mysql_url
         assert report["evidence"][1]["health"] == "healthy"

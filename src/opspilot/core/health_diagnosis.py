@@ -68,7 +68,9 @@ def _write_report(state: _HealthState) -> _HealthState:
         if len(dependencies) > 1:
             label = f"{label} {dependency['source']}"
         summary.append(f"{label} health is {dependency['health']}.")
-    healthy = service["health"] == "healthy"
+    healthy = service["health"] == "healthy" and all(
+        dependency["health"] == "healthy" for dependency in dependencies
+    )
     if not healthy:
         summary.append("The cause is undetermined.")
     return {"report": {
@@ -85,6 +87,8 @@ def _write_report(state: _HealthState) -> _HealthState:
 def run_health_diagnosis(
     question: str, service: HealthTool,
     dependency: HealthTool | Sequence[HealthTool] | None = None,
+    *,
+    check_dependencies: bool = False,
 ) -> DiagnosisReport:
     if isinstance(dependency, Sequence):
         dependency_tools = tuple(dependency)
@@ -100,6 +104,9 @@ def run_health_diagnosis(
         graph.add_edge("check_service", "report")
     else:
         graph.add_node("check_dependencies", partial(_check_dependencies, dependency_tools))
-        graph.add_conditional_edges("check_service", _after_service)
+        if check_dependencies:
+            graph.add_edge("check_service", "check_dependencies")
+        else:
+            graph.add_conditional_edges("check_service", _after_service)
         graph.add_edge("check_dependencies", "report")
     return graph.compile().invoke({"question": question})["report"]

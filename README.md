@@ -15,7 +15,7 @@ python -m venv .venv
 
 ## HTTP 健康诊断
 
-将服务和可选依赖的健康检查 URL 提供给 `diagnose-http`。服务端点异常或健康状态未知时，LangGraph 才会读取已配置的依赖端点。
+将服务和可选依赖的健康检查 URL 提供给 `diagnose-http`。默认在服务端点异常或健康状态未知时检查已配置的依赖。
 
 ```powershell
 .\.venv\Scripts\python.exe -m opspilot diagnose-http --service-url http://127.0.0.1:8080/health --dependency-url http://127.0.0.1:8081/health "服务健康检查失败，依赖能访问吗？"
@@ -25,7 +25,7 @@ python -m venv .venv
 
 运行 `python -m pytest tests/test_http_health.py -q` 可用自动启停的本地 HTTP 服务复跑这条诊断流程。
 
-依赖是 Redis 时，可指定一个允许直接执行 `PING` 的 `redis://HOST[:PORT]` 端点。主服务异常时调用 `PING`，收到 `PONG` 时记录 Redis 端点可响应。超时、认证拒绝和异常响应记为 `unknown`。 [Redis PING 文档](https://redis.io/docs/latest/commands/ping/)
+依赖是 Redis 时，可指定一个允许直接执行 `PING` 的 `redis://HOST[:PORT]` 端点。收到 `PONG` 时记录 Redis 端点可响应。超时、认证拒绝和异常响应记为 `unknown`。 [Redis PING 文档](https://redis.io/docs/latest/commands/ping/)
 
 ```powershell
 .\.venv\Scripts\python.exe -m opspilot diagnose-http --service-url http://127.0.0.1:8080/health --redis-dependency-url redis://127.0.0.1:6379 "服务健康检查失败，Redis 能响应吗？"
@@ -37,7 +37,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m opspilot diagnose-http --service-url http://127.0.0.1:8080/health --mysql-dependency-url mysql://127.0.0.1:3306 "服务异常，MySQL 能响应吗？"
 ```
 
-三种依赖参数可以同时使用，也可以分别重复传入。主服务异常时按 HTTP、Redis、MySQL 的顺序检查，组内按传入顺序执行。每个端点分别使用 `--timeout`，报告按调用顺序保存各自的来源、结果和耗时。
+三种依赖参数可以同时使用，也可以分别重复传入。依赖按 HTTP、Redis、MySQL 的顺序检查，组内按传入顺序执行。每个端点分别使用 `--timeout`，报告按调用顺序保存各自的来源、结果和耗时。
 
 ### 复用本地配置
 
@@ -54,8 +54,10 @@ python -m venv .venv
 ```
 
 ```powershell
-.\.venv\Scripts\python.exe -m opspilot diagnose-http --config .\health.json "复查服务和依赖"
+.\.venv\Scripts\python.exe -m opspilot diagnose-http --config .\health.json --check-dependencies "复查服务和依赖"
 ```
+
+`--check-dependencies` 适用于配置文件和直接传入 URL 两种方式。启用后，即使主服务健康，也会检查所有已配置的依赖。任一已检查的依赖异常或状态未知时，报告的诊断状态为 `undetermined`。
 
 ### 对比复查报告
 
