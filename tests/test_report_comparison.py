@@ -9,15 +9,17 @@ from tempfile import TemporaryDirectory
 import pytest
 
 from opspilot.adapters.hirehub_snapshot import HireHubSnapshotAdapter
-from opspilot.core.diagnosis import DiagnosisReport, HealthEvidence
+from opspilot.connectors.rabbitmq import RabbitMQUnavailableEvidence
+from opspilot.core.diagnosis import DiagnosisReport, HealthEvidence, QueueEvidence
 from opspilot.core.target_trace import run_target_trace
-from opspilot.report_comparison import compare_health_reports, compare_trace_reports
+from opspilot.report_comparison import compare_health_reports, compare_queue_reports, compare_trace_reports
 from opspilot.report_markdown import render_health_comparison_markdown
 from opspilot.task_store import StoredReport, list_reports, save_report
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples/hirehub-notification-snapshot.json"
 SERVICE_URL = "http://127.0.0.1:8080/health"
 REDIS_URL = "redis://127.0.0.1:6379"
+QUEUE_SOURCE = "http://127.0.0.1:15672/api/queues/%2F/orders"
 
 
 def _compare(database: Path, command: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -25,6 +27,66 @@ def _compare(database: Path, command: str, *args: str) -> subprocess.CompletedPr
         [sys.executable, "-m", "opspilot", "--db", str(database), command, *args],
         cwd=database.parent, capture_output=True, text=True, encoding="utf-8", timeout=20,
     )
+
+
+@pytest.fixture
+def saved_queue_pair() -> Iterator[tuple[Path, StoredReport, StoredReport]]:
+    queue: QueueEvidence = {
+        "tool": "inspect_queue", "source": QUEUE_SOURCE,
+        "observed_at": "2026-11-20T06:00:00+00:00", "outcome": "observed",
+        "pending_messages": 6, "unacknowledged_messages": 3, "registered_consumers": 1,
+        "sampled_pending_message_ids": [],
+    }
+    partial_queue: RabbitMQUnavailableEvidence = {
+        "tool": "inspect_queue", "source": QUEUE_SOURCE,
+        "observed_at": "2026-11-20T06:01:00+00:00", "outcome": "missing",
+        "reason": "metric_missing", "http_status": 200,
+        "unacknowledged_messages": 0, "registered_consumers": 0,
+    }
+    before: DiagnosisReport = {
+        "question": "Check the queue", "status": "undetermined",
+        "conclusion": "Pending messages were observed.", "processing_correlation": None,
+        "evidence": [queue],
+    }
+    after: DiagnosisReport = {
+        **before, "conclusion": "Pending message count is unavailable.", "evidence": [partial_queue],
+    }
+    with TemporaryDirectory(prefix="opspilot-queue-comparison-") as directory:
+        database = Path(directory) / "reports.sqlite3"
+        yield database, save_report(database, before), save_report(database, after)
+
+
+def test_compare_queue_preserves_partial_observations_and_zero_counts(saved_queue_pair) -> None:
+    database, before, after = saved_queue_pair
+    original = database.read_bytes()
+
+    result = _compare(database, "compare-queue", before["task_id"], after["task_id"])
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "before_task_id": before["task_id"], "after_task_id": after["task_id"],
+        "queue_source": QUEUE_SOURCE,
+        "changes": [
+            {"field": "queue.http_status", "before": None, "after": 200},
+            {"field": "queue.outcome", "before": "observed", "after": "missing"},
+            {"field": "queue.pending_messages", "before": 6, "after": None},
+            {"field": "queue.reason", "before": None, "after": "metric_missing"},
+            {"field": "queue.registered_consumers", "before": 1, "after": 0},
+            {"field": "queue.unacknowledged_messages", "before": 3, "after": 0},
+        ],
+    }
+    assert database.read_bytes() == original
+
+
+def test_compare_queue_requires_the_same_queue_source(saved_queue_pair, saved_health_pair) -> None:
+    _, before, after = saved_queue_pair
+    after["evidence"][0]["source"] = QUEUE_SOURCE.replace("orders", "returns")
+    with pytest.raises(ValueError, match="must match on the queue evidence source"):
+        compare_queue_reports(before, after)
+
+    _, health_report, _ = saved_health_pair
+    with pytest.raises(ValueError, match="reports with one queue observation"):
+        compare_queue_reports(before, health_report)
 
 
 @pytest.fixture

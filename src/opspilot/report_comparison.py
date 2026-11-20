@@ -15,7 +15,7 @@ class TraceScope(TypedDict):
     message_id: str
 
 
-class TraceChange(TypedDict):
+class FieldChange(TypedDict):
     field: str
     before: ComparisonValue
     after: ComparisonValue
@@ -25,7 +25,14 @@ class TraceComparison(TypedDict):
     before_task_id: str
     after_task_id: str
     target: TraceScope
-    changes: list[TraceChange]
+    changes: list[FieldChange]
+
+
+class QueueComparison(TypedDict):
+    before_task_id: str
+    after_task_id: str
+    queue_source: str
+    changes: list[FieldChange]
 
 
 HealthRole = Literal["service", "dependency"]
@@ -65,15 +72,9 @@ def _scope(trace: TargetTraceSummary) -> TraceScope:
     }
 
 
-def _values(trace: TargetTraceSummary, evidence: list[Evidence]) -> dict[str, ComparisonValue]:
-    values: dict[str, ComparisonValue] = {
-        f"branches.{branch}": status for branch, status in trace["branches"].items()
-    }
-    queue = next((check for check in evidence if check.get("checkpoint") == "queue"), None)
-    if queue is None:
-        return values
+def _queue_values(queue: Evidence) -> dict[str, ComparisonValue]:
     outcome = queue["outcome"]
-    values["queue.outcome"] = outcome
+    values: dict[str, ComparisonValue] = {"queue.outcome": outcome}
     if outcome == "observed":
         values["queue.pending_messages"] = queue.get("pending_messages")
     partial_response = (
@@ -87,6 +88,28 @@ def _values(trace: TargetTraceSummary, evidence: list[Evidence]) -> dict[str, Co
     return values
 
 
+def _trace_values(trace: TargetTraceSummary, evidence: list[Evidence]) -> dict[str, ComparisonValue]:
+    values: dict[str, ComparisonValue] = {
+        f"branches.{branch}": status for branch, status in trace["branches"].items()
+    }
+    queue = next((check for check in evidence if check.get("checkpoint") == "queue"), None)
+    if queue is not None:
+        values.update(_queue_values(queue))
+    return values
+
+
+def _changed_fields(
+    before: dict[str, ComparisonValue], after: dict[str, ComparisonValue]
+) -> list[FieldChange]:
+    changes: list[FieldChange] = []
+    for field in sorted(before.keys() | after.keys()):
+        previous = before.get(field)
+        current = after.get(field)
+        if previous != current:
+            changes.append({"field": field, "before": previous, "after": current})
+    return changes
+
+
 def compare_trace_reports(before: StoredReport, after: StoredReport) -> TraceComparison:
     before_trace = before.get("target_trace")
     after_trace = after.get("target_trace")
@@ -96,19 +119,38 @@ def compare_trace_reports(before: StoredReport, after: StoredReport) -> TraceCom
     if scope != _scope(after_trace):
         raise ValueError("Reports must match on environment, vhost, delivery ID, and message ID.")
 
-    before_values = _values(before_trace, before["evidence"])
-    after_values = _values(after_trace, after["evidence"])
-    changes: list[TraceChange] = []
-    for field in sorted(before_values.keys() | after_values.keys()):
-        previous = before_values.get(field)
-        current = after_values.get(field)
-        if previous != current:
-            changes.append({"field": field, "before": previous, "after": current})
     return {
         "before_task_id": before["task_id"],
         "after_task_id": after["task_id"],
         "target": scope,
-        "changes": changes,
+        "changes": _changed_fields(
+            _trace_values(before_trace, before["evidence"]),
+            _trace_values(after_trace, after["evidence"]),
+        ),
+    }
+
+
+def _queue_observation(report: StoredReport) -> tuple[str, dict[str, ComparisonValue]]:
+    queues = [check for check in report["evidence"] if check["tool"] == "inspect_queue"]
+    if len(queues) != 1:
+        raise ValueError("Both task IDs must refer to diagnosis reports with one queue observation.")
+    queue, = queues
+    values = _queue_values(queue)
+    values["queue.reason"] = queue.get("reason")
+    values["queue.http_status"] = queue.get("http_status")
+    return queue["source"], values
+
+
+def compare_queue_reports(before: StoredReport, after: StoredReport) -> QueueComparison:
+    source, before_values = _queue_observation(before)
+    after_source, after_values = _queue_observation(after)
+    if source != after_source:
+        raise ValueError("Reports must match on the queue evidence source.")
+    return {
+        "before_task_id": before["task_id"],
+        "after_task_id": after["task_id"],
+        "queue_source": source,
+        "changes": _changed_fields(before_values, after_values),
     }
 
 

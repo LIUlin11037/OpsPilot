@@ -152,6 +152,16 @@ JSON 报告包含任务 ID、用户提交的问题、诊断状态和结论。每
 
 RabbitMQ 模式保留队列证据及读取耗时。报告分别描述待投递数和已投递待确认数。待投递数为零时，`no_backlog_observed` 仅表示当次未观测到等待投递的消息，报告仍会列出待确认数。发现待投递积压时，报告也会说明消费者注册数，根因标为 `undetermined`。
 
+### 对比队列复查报告
+
+将同一队列的两份诊断报告按基准、复查的顺序传给 `compare-queue`。命令读取同一 SQLite 数据库，要求两份报告的队列来源完全一致，包括 RabbitMQ 管理地址、虚拟主机和队列名。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot compare-queue "BEFORE_TASK_ID" "AFTER_TASK_ID"
+```
+
+`changes` 列出发生变化的队列指标和读取结果。计数为 `0` 表示实际观测到零，`null` 表示当次读不到该指标。待投递数缺失时，报告中仍有有效值的待确认数和消费者注册数也会参与对比。
+
 ### 查看消费者端点健康
 
 已知消费者的 HTTP 健康端点时，可在 RabbitMQ 模式加上 `--consumer-health-url`。观察到待投递或待确认消息时，OpsPilot 发送只读 GET，记录端点健康状态、观测时间和耗时。待投递数缺失时，已观测到的待确认消息也能触发检查。健康状态说明该端点当时的响应，积压原因仍需结合队列和业务证据核查。
@@ -231,7 +241,7 @@ $env:OPSPILOT_RABBITMQ_PASSWORD = "opspilot_local_only"
 .\.venv\Scripts\python.exe -m pytest tests/test_rabbitmq_live.py --rabbitmq-live -q
 ```
 
-测试覆盖空队列、有待投递且无订阅、部分及全部消息已投递待确认和队列清空。验收同时验证消费者健康端点从 `503` 恢复到 `204`、清空后跳过健康检查、读取业务记录及按任务 ID 回看报告。每次测试使用 broker 生成的独占队列和临时 SQLite，结束时随连接和临时目录一起清理。
+测试覆盖空队列、有待投递且无订阅、部分及全部消息已投递待确认和队列清空。验收还会对比清空前后的队列报告，并验证消费者健康端点从 `503` 恢复到 `204`、清空后跳过健康检查、读取业务记录及按任务 ID 回看报告。每次测试使用 broker 生成的独占队列和临时 SQLite，结束时随连接和临时目录一起清理。
 
 在同一套验收中使用 Java 目标服务时，加上 `--java-target`。
 

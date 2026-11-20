@@ -261,3 +261,13 @@ def test_live_queue_lifecycle(
             assert len(drained["evidence"]) == 1
             assert _snapshot(drained["evidence"][0]) == (0, 0, 1)
             assert health_requests == ["/health", "/health"]
+            compared = _run_cli(directory, "compare-queue", delivered["task_id"], drained["task_id"])
+            assert compared["queue_source"] == queue_evidence["source"]
+            changes = {
+                change["field"]: (change["before"], change["after"])
+                for change in compared["changes"]
+            }
+            expected_changes = {"queue.unacknowledged_messages": (prefetch, 0)}
+            if prefetch < MESSAGE_COUNT:
+                expected_changes["queue.pending_messages"] = (MESSAGE_COUNT - prefetch, 0)
+            assert changes == expected_changes
