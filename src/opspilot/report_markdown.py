@@ -22,6 +22,7 @@ _PLAN_CONDITIONS = {
     "always": "Always",
     "service_unhealthy": "Service unhealthy",
     "service_unhealthy_or_unknown": "Service unhealthy or unknown",
+    "service_unhealthy_or_unknown_or_log_errors": "Service unhealthy or unknown, or service log errors observed",
     "queue_activity": "Pending or unacknowledged messages observed",
 }
 _EVIDENCE_FIELDS = {

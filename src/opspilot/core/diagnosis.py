@@ -149,7 +149,10 @@ class ToolCall(TypedDict):
 
 class PlannedCheck(TypedDict):
     tool: ToolName
-    when: Literal["always", "service_unhealthy", "service_unhealthy_or_unknown", "queue_activity"]
+    when: Literal[
+        "always", "service_unhealthy", "service_unhealthy_or_unknown",
+        "service_unhealthy_or_unknown_or_log_errors", "queue_activity",
+    ]
     count: int
 
 

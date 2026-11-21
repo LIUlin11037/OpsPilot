@@ -68,6 +68,8 @@ def test_service_log_preserves_an_unavailable_result_for_an_oversized_export() -
         (403, "{invalid", None, None, False, False, False),
         (204, "", 0, None, True, True, False),
         (204, "entry", 1, None, False, True, False),
+        (204, "entry", 1, None, True, True, False),
+        (204, None, None, "log_not_found", True, True, False),
         (204, None, None, "log_not_found", False, True, True),
         (403, "", 0, None, False, True, False),
     ],
@@ -102,7 +104,9 @@ def test_http_cli_uses_the_configured_log_on_failure_or_explicit_recheck(
             if automatic and log_flag:
                 preview = _cli(directory, command, "--config", str(config), *options, "--plan", "Check HTTP health")
                 assert preview.returncode == 0, preview.stderr
-                assert json.loads(preview.stdout)["checks"][1]["when"] == "always"
+                planned_checks = json.loads(preview.stdout)["checks"]
+                assert planned_checks[1]["when"] == "always"
+                assert planned_checks[2]["when"] == "service_unhealthy_or_unknown_or_log_errors"
                 assert requests == []
             result = _cli(directory, command, "--config", str(config), *options, "Check HTTP health")
 
@@ -123,7 +127,7 @@ def test_http_cli_uses_the_configured_log_on_failure_or_explicit_recheck(
             "no_failure_observed" if service_status == 204 and not observed_log_issue else "undetermined"
         )
         expected_requests = ["/health"]
-        if service_status != 204 or dependency_flag:
+        if service_status != 204 or dependency_flag or (log_flag and count == 1):
             tools.append("inspect_dependency_health")
             expected_requests.append("/dependency")
             assert report["evidence"][-1]["http_status"] == 204
@@ -133,10 +137,14 @@ def test_http_cli_uses_the_configured_log_on_failure_or_explicit_recheck(
             assert report["planned_checks"][1] == {
                 "tool": "inspect_service_log", "when": "always" if log_flag else "service_unhealthy", "count": 1,
             }
+            if log_flag:
+                assert report["planned_checks"] == planned_checks
         if count == 1:
             rendered = _cli(directory, "report", report["task_id"], "--format", "markdown")
             assert rendered.returncode == 0, rendered.stderr
             assert "Error-level entries 1" in rendered.stdout
+            if automatic and log_flag:
+                assert "Service unhealthy or unknown, or service log errors observed" in rendered.stdout
             assert "raw-log-marker" not in rendered.stdout
 
 

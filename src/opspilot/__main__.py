@@ -331,7 +331,11 @@ def _prepare_auto_diagnosis(
         )
         if dependency_count:
             checks.append({
-                "tool": "inspect_dependency_health", "when": "service_unhealthy_or_unknown",
+                "tool": "inspect_dependency_health",
+                "when": (
+                    "service_unhealthy_or_unknown_or_log_errors" if args.check_service_log
+                    else "service_unhealthy_or_unknown"
+                ),
                 "count": dependency_count,
             })
         plan = {

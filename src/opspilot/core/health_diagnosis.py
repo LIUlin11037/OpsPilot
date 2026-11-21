@@ -81,7 +81,9 @@ def _after_service(
 def _after_log(
     state: _HealthState, *, has_dependencies: bool, check_dependencies: bool,
 ) -> Literal["check_dependencies", "report"]:
-    if has_dependencies and (check_dependencies or state["service"]["health"] != "healthy"):
+    service_log = state.get("service_log")
+    has_log_errors = service_log is not None and service_log.get("error_count", 0) > 0
+    if has_dependencies and (check_dependencies or state["service"]["health"] != "healthy" or has_log_errors):
         return "check_dependencies"
     return "report"
 

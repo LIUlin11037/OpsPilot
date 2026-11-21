@@ -109,7 +109,7 @@ python -m venv .venv
 
 日志输入为 UTF-8 JSON Lines。每行提供带时区的 ISO 8601 `timestamp` 和 `level`，例如 `{"timestamp":"2026-11-21T03:00:00Z","level":"ERROR"}`。OpsPilot 统计健康观测时间前五分钟内的 `ERROR`、`CRITICAL` 和 `FATAL` 条目。报告记录来源、时间窗口和条数。文件缺失、格式无效或超过 1 MiB 时，日志证据记为不可用，后续依赖检查继续。
 
-复查时可加上 `--check-service-log`。只要配置了日志路径，HTTP 流程就会采集日志，包括服务已恢复的情况。服务健康时，如果本次窗口仍有错误或日志不可用，整体诊断状态为 `undetermined`。两个诊断入口都支持此选项。
+复查时可加上 `--check-service-log`。只要配置了日志路径，HTTP 流程就会采集日志，包括服务已恢复的情况。服务健康时，窗口内仍有错误会触发已配置的依赖检查，整体诊断状态为 `undetermined`。如果日志不可用，报告同样记为 `undetermined`，并注明读取失败原因。两个诊断入口都支持此选项。
 
 ```powershell
 .\.venv\Scripts\python.exe -m opspilot diagnose-http --config .\health.json --check-service-log "复查恢复后的日志"
