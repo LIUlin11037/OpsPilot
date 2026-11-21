@@ -9,6 +9,8 @@ import pytest
 
 from opspilot.target_config import load_target_config
 
+HIREHUB_EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "hirehub-notification-snapshot.json"
+
 
 def _cli(directory: str, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -94,6 +96,10 @@ def test_auto_diagnosis_runs_and_saves_the_selected_workflow(
          "Check this delivery", "--message-id must not be empty"),
         (["--config", "unused.json", "--message-id", "msg-101"],
          "HTTP health check", "HTTP health symptoms conflict with --message-id"),
+        (["--delivery-id", "1001"], "投递通知没收到", "--delivery-id requires --config"),
+        (["--delivery-id", "0"], "投递通知没收到", "--delivery-id must be positive"),
+        (["--message-id", "msg-101", "--delivery-id", "1001"],
+         "投递通知没收到", "not allowed with argument --message-id"),
     ],
 )
 def test_auto_diagnosis_requires_clear_and_configured_symptoms(options, question, error) -> None:
@@ -262,11 +268,66 @@ def test_auto_message_lookup_requires_processing_source() -> None:
         assert not (Path(directory) / ".opspilot").exists()
 
 
+@pytest.mark.parametrize("delivery_id", [1001, 1002])
+def test_auto_delivery_trace_reuses_the_snapshot_workflow(delivery_id: int) -> None:
+    with TemporaryDirectory(prefix="opspilot-target-delivery-") as directory:
+        config_dir = Path(directory) / "configs"
+        config_dir.mkdir()
+        snapshot = config_dir / "delivery evidence.json"
+        snapshot.write_bytes(HIREHUB_EXAMPLE.read_bytes())
+        config = config_dir / "target.json"
+        config.write_text(json.dumps({"hirehub": {"snapshot": snapshot.name}}), encoding="utf-8")
+        question = "投递成功后没收到通知，队列是否积压？"
+        result = _cli(
+            directory, "diagnose-auto", "--config", str(config), "--delivery-id", str(delivery_id), question,
+        )
+        explicit = _cli(
+            directory, "diagnose-hirehub", "--snapshot", str(snapshot), "--delivery-id", str(delivery_id), question,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert explicit.returncode == 0, explicit.stderr
+        report = json.loads(result.stdout)
+        baseline = json.loads(explicit.stdout)
+        assert report["routing"] == {"workflow": "target_trace", "matched_terms": [], "selected_by": "delivery_id"}
+        for field in ("question", "status", "conclusion", "target_trace", "next_checks"):
+            assert report[field] == baseline[field]
+        assert [(call["tool"], call["outcome"]) for call in report["tool_calls"]] == [
+            (call["tool"], call["outcome"]) for call in baseline["tool_calls"]
+        ]
+        assert report["target_trace"]["entity_id"] == delivery_id
+        if delivery_id == 1001:
+            assert report["evidence"][0]["source"] == f"{snapshot.as_uri()}#delivery"
+            assert report["evidence"] == baseline["evidence"]
+            assert report["target_trace"]["branches"] == {"job": "observed", "notification": "not_observed"}
+        else:
+            assert report["evidence"][0]["source"] == snapshot.as_uri()
+            assert report["evidence"][0]["reason"] == "delivery_id_mismatch"
+        markdown = _cli(directory, "report", report["task_id"], "--format", "markdown")
+        assert markdown.returncode == 0, markdown.stderr
+        assert "**Selection basis** Requested delivery ID" in markdown.stdout
+        assert f"**Entity ID** {delivery_id}" in markdown.stdout
+
+
+def test_auto_delivery_trace_requires_hirehub_snapshot_configuration() -> None:
+    with TemporaryDirectory(prefix="opspilot-target-delivery-") as directory:
+        config = Path(directory) / "target.json"
+        config.write_text('{"health": {"service_url": "http://localhost/health"}}', encoding="utf-8")
+        result = _cli(directory, "diagnose-auto", "--config", str(config), "--delivery-id", "1001", "Trace delivery")
+
+        assert result.returncode == 2
+        assert "--delivery-id requires hirehub.snapshot in --config" in result.stderr
+        assert not (Path(directory) / ".opspilot").exists()
+
+
 @pytest.mark.parametrize(
     ("data", "error"),
     [
-        ({}, "requires a health or rabbitmq section"),
+        ({}, "requires a health, rabbitmq, or hirehub section"),
         ({"health": None}, "health must be a JSON object"),
+        ({"hirehub": {"snapshot": ""}}, "hirehub.snapshot must be a nonempty path"),
+        ({"hirehub": {"snapshot": "snapshot.json", "management_url": "http://localhost"}},
+         "HireHub configuration contains unsupported fields"),
         ({"rabbitmq": {"management_url": "http://localhost"}}, "rabbitmq.queue must be a nonempty string"),
         ({"rabbitmq": {"management_url": "http://localhost", "queue": "orders", "password": "fixture"}},
          "unsupported fields"),

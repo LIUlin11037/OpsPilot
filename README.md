@@ -17,7 +17,7 @@ python -m venv .venv
 
 `diagnose-auto` 根据描述中的中英文症状词，在 HTTP 健康检查和 RabbitMQ 队列诊断之间选择一个已配置的流程。HTTP 流程使用配置的服务和依赖端点，队列流程使用指定的 Management API 和虚拟主机。命令只调用选中的流程，并在报告的 `routing` 记录流程名称和匹配词。
 
-把常用目标保存为 UTF-8 的 `target.json`。可以配置其中一类或两类流程。`health` 使用 HTTP 健康配置字段，`rabbitmq` 需要管理地址与队列名，虚拟主机默认为 `/`，超时默认为 5 秒。RabbitMQ 和 MySQL 凭据通过环境变量提供。
+把常用目标保存为 UTF-8 的 `target.json`。可以按需配置 `health`、`rabbitmq` 和 `hirehub`。`health` 使用 HTTP 健康配置字段，`rabbitmq` 需要管理地址与队列名，虚拟主机默认为 `/`，超时默认为 5 秒。RabbitMQ 和 MySQL 凭据通过环境变量提供。
 
 ```json
 {
@@ -43,6 +43,20 @@ python -m venv .venv
 
 ```powershell
 .\.venv\Scripts\python.exe -m opspilot diagnose-auto --config .\target.json --message-id "msg-101" "这条消息处理了吗？"
+```
+
+追踪 HireHub 投递时，可以在目标配置的 `hirehub.snapshot` 指定本地快照。`--delivery-id` 选择快照追踪流程。相对路径以配置文件所在目录为基准。若把以下配置保存到仓库根目录，就可以使用随仓库提供的样本。
+
+```json
+{
+  "hirehub": {
+    "snapshot": "examples/hirehub-notification-snapshot.json"
+  }
+}
+```
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot diagnose-auto --config .\target.json --delivery-id 1001 "投递成功后没收到通知"
 ```
 
 临时排查也可以直接提供连接选项。

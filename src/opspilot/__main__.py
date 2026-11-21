@@ -21,6 +21,7 @@ from opspilot.connectors.redis_health import RedisHealthConnector
 from opspilot.connectors.simulated import SimulatedQueueConnector
 from opspilot.core.diagnosis import (
     DiagnosisReport,
+    DiagnosisRoute,
     HealthTool,
     TargetProcessingTool,
     run_diagnosis,
@@ -244,6 +245,11 @@ def _run_auto_diagnosis(args: argparse.Namespace, parser: argparse.ArgumentParse
             raise ValueError("--message-id must not be empty")
         if args.config is None:
             raise ValueError("--message-id requires --config with a RabbitMQ processing source")
+    if args.delivery_id is not None:
+        if args.delivery_id <= 0:
+            raise ValueError("--delivery-id must be positive")
+        if args.config is None:
+            raise ValueError("--delivery-id requires --config with a HireHub snapshot")
     direct_options = (args.health_config, args.management_url, args.queue, args.vhost, args.timeout)
     if args.config is not None and any(value is not None for value in direct_options):
         raise ValueError("--config cannot be combined with direct target options")
@@ -251,6 +257,17 @@ def _run_auto_diagnosis(args: argparse.Namespace, parser: argparse.ArgumentParse
         raise ValueError("--management-url and --queue must be supplied together")
     if args.management_url is None and (args.vhost is not None or args.timeout is not None):
         raise ValueError("--vhost and --timeout require --management-url")
+
+    if args.delivery_id is not None:
+        target = load_target_config(args.config)
+        if target.hirehub_snapshot is None:
+            raise ValueError("--delivery-id requires hirehub.snapshot in --config")
+        routing: DiagnosisRoute = {
+            "workflow": "target_trace", "matched_terms": [], "selected_by": "delivery_id",
+        }
+        report = run_target_trace(question, args.delivery_id, HireHubSnapshotAdapter(target.hirehub_snapshot))
+        report["routing"] = routing
+        return report
 
     routing = select_diagnosis_route(question, message_lookup=args.message_id is not None)
     target = load_target_config(args.config) if args.config is not None else None
@@ -366,13 +383,15 @@ def main() -> None:
     )
     health.add_argument("question", help="Incident description.")
     auto_diagnose = commands.add_parser(
-        "diagnose-auto", help="Choose a configured HTTP health or RabbitMQ queue workflow.",
+        "diagnose-auto", help="Choose a configured HTTP, RabbitMQ, or HireHub snapshot workflow.",
     )
     auto_diagnose.add_argument("--config", type=Path, help="JSON file with workflows for a target.")
     auto_diagnose.add_argument("--health-config", type=Path, help="JSON file with health endpoints.")
     auto_diagnose.add_argument("--management-url", help="RabbitMQ Management API base URL.")
     _add_queue_options(auto_diagnose)
-    auto_diagnose.add_argument("--message-id", help="Look up an exact message using the configured processing source.")
+    auto_scope = auto_diagnose.add_mutually_exclusive_group()
+    auto_scope.add_argument("--message-id", help="Look up an exact message in the configured processing source.")
+    auto_scope.add_argument("--delivery-id", type=int, help="Trace a delivery in the configured HireHub snapshot.")
     auto_diagnose.add_argument("question", help="Incident description.")
     hirehub = commands.add_parser(
         "diagnose-hirehub", help="Diagnose a HireHub delivery with live reads or a snapshot."

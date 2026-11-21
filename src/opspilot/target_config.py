@@ -22,6 +22,7 @@ class RabbitMQTargetConfig:
 class TargetConfig:
     health: HealthConfig | None = None
     rabbitmq: RabbitMQTargetConfig | None = None
+    hirehub_snapshot: Path | None = None
 
 
 def _rabbitmq_string(data: dict[str, object], field: str, default: str = "") -> str:
@@ -59,19 +60,32 @@ def _parse_rabbitmq(data: dict[str, object], config_dir: Path) -> RabbitMQTarget
     )
 
 
+def _parse_hirehub_snapshot(data: object, config_dir: Path) -> Path:
+    if not isinstance(data, dict):
+        raise ValueError("hirehub must be a JSON object.")
+    if data.keys() - {"snapshot"}:
+        raise ValueError("HireHub configuration contains unsupported fields.")
+    snapshot = data.get("snapshot")
+    if not isinstance(snapshot, str) or not snapshot.strip():
+        raise ValueError("hirehub.snapshot must be a nonempty path.")
+    return config_dir / snapshot
+
+
 def load_target_config(path: Path) -> TargetConfig:
     data = read_config_object(path, "Target")
-    if data.keys() - {"health", "rabbitmq"}:
+    if data.keys() - {"health", "rabbitmq", "hirehub"}:
         raise ValueError("Target configuration contains unsupported fields.")
     if not data:
-        raise ValueError("Target configuration requires a health or rabbitmq section.")
+        raise ValueError("Target configuration requires a health, rabbitmq, or hirehub section.")
     health = data.get("health")
     rabbitmq = data.get("rabbitmq")
     if "health" in data and not isinstance(health, dict):
         raise ValueError("health must be a JSON object.")
     if "rabbitmq" in data and not isinstance(rabbitmq, dict):
         raise ValueError("rabbitmq must be a JSON object.")
+    config_dir = path.absolute().parent
     return TargetConfig(
         health=parse_health_config(health) if isinstance(health, dict) else None,
-        rabbitmq=_parse_rabbitmq(rabbitmq, path.absolute().parent) if isinstance(rabbitmq, dict) else None,
+        rabbitmq=_parse_rabbitmq(rabbitmq, config_dir) if isinstance(rabbitmq, dict) else None,
+        hirehub_snapshot=_parse_hirehub_snapshot(data["hirehub"], config_dir) if "hirehub" in data else None,
     )

@@ -13,6 +13,7 @@ from opspilot.report_comparison import (
 from opspilot.task_store import StoredReport
 
 _MARKDOWN = re.compile(r"([\\`*_\[\]|~])")
+_ROUTE_BASES = {"message_id": "Requested message ID", "delivery_id": "Requested delivery ID"}
 _EVIDENCE_FIELDS = {
     "health": "Health",
     "status": "State",
@@ -133,8 +134,9 @@ def render_markdown(report: StoredReport) -> str:
     routing = report.get("routing")
     if routing is not None:
         lines.append(f"- **Selected workflow** {_value(routing['workflow'])}")
-        if routing.get("selected_by") == "message_id":
-            lines.append("- **Selection basis** Requested message ID")
+        basis = _ROUTE_BASES.get(routing.get("selected_by", ""))
+        if basis is not None:
+            lines.append(f"- **Selection basis** {basis}")
         if routing["matched_terms"]:
             lines.append(f"- **Matched terms** {_value(routing['matched_terms'])}")
     if correlation is not None:

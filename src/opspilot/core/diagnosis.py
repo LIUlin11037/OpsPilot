@@ -206,7 +206,7 @@ class NextCheck(TypedDict):
     description: str
 
 
-DiagnosisWorkflow = Literal["http_health", "queue"]
+DiagnosisWorkflow = Literal["http_health", "queue", "target_trace"]
 
 
 class DiagnosisRouteFields(TypedDict):
@@ -215,7 +215,7 @@ class DiagnosisRouteFields(TypedDict):
 
 
 class DiagnosisRoute(DiagnosisRouteFields, total=False):
-    selected_by: Literal["message_id"]
+    selected_by: Literal["message_id", "delivery_id"]
 
 
 class DiagnosisReport(DiagnosisReportFields, total=False):
