@@ -200,12 +200,13 @@ def test_target_queue_uses_configured_checks_only_when_queue_activity_is_observe
         "result": "succeeded", "attempted_at": "2026-11-19T03:00:00Z",
     })
     queue_path = "/api/queues/staging/orders"
+    consumer_status = 403 if pending is None else 503
 
     def respond(path):
         if path == queue_path:
             return 200, metrics
         if path == "/consumer-health":
-            return 503, b""
+            return consumer_status, b""
         return 200, record.encode()
 
     monkeypatch.setenv("OPSPILOT_RABBITMQ_USER", "test-reader")
@@ -227,10 +228,24 @@ def test_target_queue_uses_configured_checks_only_when_queue_activity_is_observe
                 },
             }), encoding="utf-8")
             result = _cli(directory, "diagnose-auto", "--config", str(config), "队列积压")
+        assert result.returncode == 0, result.stderr
+        report = json.loads(result.stdout)
+        config.unlink()
+        markdown = _cli(directory, "report", report["task_id"], "--format", "markdown")
 
-    assert result.returncode == 0, result.stderr
-    report = json.loads(result.stdout)
+    assert markdown.returncode == 0, markdown.stderr
     assert report["routing"]["workflow"] == "queue"
+    assert report["planned_checks"] == [
+        {"tool": "inspect_queue", "when": "always", "count": 1},
+        {"tool": "inspect_consumer_endpoint", "when": "queue_activity", "count": 1},
+        {"tool": "inspect_processing", "when": "queue_activity", "count": 1},
+    ]
+    expected_calls = 0 if pending == 0 and unacknowledged == 0 else 1
+    assert "## Planned checks" in markdown.stdout
+    assert r"| inspect\_queue | Always | 1 | 1 |" in markdown.stdout
+    for tool in ("inspect_consumer_endpoint", "inspect_processing"):
+        label = tool.replace("_", "\\_")
+        assert f"| {label} | Pending or unacknowledged messages observed | 1 | {expected_calls} |" in markdown.stdout
     if pending == 0 and unacknowledged == 0:
         assert requests == [queue_path]
         assert [call["tool"] for call in report["tool_calls"]] == ["inspect_queue"]
@@ -238,7 +253,8 @@ def test_target_queue_uses_configured_checks_only_when_queue_activity_is_observe
 
     queue, health, processing = report["evidence"]
     assert queue["unacknowledged_messages"] == unacknowledged
-    assert health["tool"] == "inspect_consumer_endpoint" and health["http_status"] == 503
+    assert health["tool"] == "inspect_consumer_endpoint" and health["http_status"] == consumer_status
+    assert health["outcome"] == ("missing" if consumer_status == 403 else "observed")
     assert processing["tool"] == "inspect_processing" and processing["message_id"] == "msg-101"
     assert [call["tool"] for call in report["tool_calls"]] == [
         "inspect_queue", "inspect_consumer_endpoint", "inspect_processing",
@@ -298,6 +314,9 @@ def test_auto_diagnosis_can_lookup_exact_message_independently_of_queue_activity
         report = json.loads(result.stdout)
         assert report["routing"] == {"workflow": "queue", "matched_terms": [], "selected_by": "message_id"}
         assert report["requested_message_id"] == message_id
+        assert report["planned_checks"][-1] == {
+            "tool": "inspect_processing", "when": "always", "count": 1,
+        }
         queue, processing = report["evidence"]
         assert queue["outcome"] == ("observed" if queue_status == 200 else "missing")
         assert processing["message_id"] == message_id and processing["result"] == "failed"

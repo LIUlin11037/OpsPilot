@@ -131,6 +131,12 @@ class ToolCall(TypedDict):
     duration_ms: float
 
 
+class PlannedCheck(TypedDict):
+    tool: ToolName
+    when: Literal["always", "service_unhealthy_or_unknown", "queue_activity"]
+    count: int
+
+
 class QueueTool(Protocol):
     def inspect_queue(self) -> QueueEvidence | UnavailableQueueEvidence: ...
 
@@ -224,6 +230,7 @@ class DiagnosisReport(DiagnosisReportFields, total=False):
     target_trace: TargetTraceSummary
     next_checks: list[NextCheck]
     routing: DiagnosisRoute
+    planned_checks: list[PlannedCheck]
 
 
 _NEXT_CHECK_DESCRIPTIONS: dict[NextCheckAction, str] = {

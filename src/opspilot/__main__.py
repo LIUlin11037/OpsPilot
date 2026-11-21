@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import TypedDict
 
 from opspilot.adapters.hirehub_capture import HireHubLiveAdapter
 from opspilot.adapters.hirehub_snapshot import NOTIFICATION_QUEUE, HireHubSnapshotAdapter
@@ -25,8 +25,8 @@ from opspilot.core.diagnosis import (
     DiagnosisReport,
     DiagnosisRoute,
     HealthTool,
+    PlannedCheck,
     TargetProcessingTool,
-    ToolName,
     run_diagnosis,
     run_queue_diagnosis,
 )
@@ -242,17 +242,11 @@ def _run_configured_health(
     )
 
 
-class _PlanCheck(TypedDict):
-    tool: ToolName
-    when: Literal["always", "service_unhealthy_or_unknown", "queue_activity"]
-    count: int
-
-
 class _AutoDiagnosisPlan(TypedDict):
     question: str
     routing: DiagnosisRoute
     scope: dict[str, str | int]
-    checks: list[_PlanCheck]
+    checks: list[PlannedCheck]
 
 
 def _prepare_auto_diagnosis(
@@ -305,7 +299,7 @@ def _prepare_auto_diagnosis(
             raise ValueError(
                 "HTTP health symptoms matched. Supply --health-config or a health section in --config."
             )
-        checks: list[_PlanCheck] = [{"tool": "inspect_service_health", "when": "always", "count": 1}]
+        checks: list[PlannedCheck] = [{"tool": "inspect_service_health", "when": "always", "count": 1}]
         dependency_count = (
             len(config.dependency_urls) + len(config.redis_dependency_urls) + len(config.mysql_dependency_urls)
         )
@@ -608,6 +602,7 @@ def main() -> None:
                     return
                 report = run_diagnostic()
                 report["routing"] = plan["routing"]
+                report["planned_checks"] = plan["checks"]
             except ValueError as error:
                 auto_diagnose.error(str(error))
         elif args.command == "diagnose-hirehub":

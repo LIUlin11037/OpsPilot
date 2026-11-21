@@ -1,6 +1,7 @@
 """Render saved diagnoses and report comparisons as Markdown."""
 
 import re
+from collections import Counter
 from collections.abc import Mapping
 from html import escape
 
@@ -14,6 +15,11 @@ from opspilot.task_store import StoredReport
 
 _MARKDOWN = re.compile(r"([\\`*_\[\]|~])")
 _ROUTE_BASES = {"message_id": "Requested message ID", "delivery_id": "Requested delivery ID"}
+_PLAN_CONDITIONS = {
+    "always": "Always",
+    "service_unhealthy_or_unknown": "Service unhealthy or unknown",
+    "queue_activity": "Pending or unacknowledged messages observed",
+}
 _EVIDENCE_FIELDS = {
     "health": "Health",
     "status": "State",
@@ -188,6 +194,22 @@ def render_markdown(report: StoredReport) -> str:
             )
     else:
         lines.append("No evidence was recorded.")
+
+    if report.get("planned_checks"):
+        lines.extend([
+            "", "## Planned checks", "",
+            "| Tool | When | Configured calls | Recorded calls |",
+            "| --- | --- | ---: | ---: |",
+        ])
+        calls = report.get("tool_calls")
+        recorded_counts = Counter(call["tool"] for call in calls) if calls is not None else None
+        for check in report["planned_checks"]:
+            tool = check["tool"]
+            condition = _PLAN_CONDITIONS.get(check["when"], check["when"])
+            recorded = recorded_counts[tool] if recorded_counts is not None else None
+            lines.append(
+                f"| {_value(tool)} | {_value(condition)} | {check['count']} | {_value(recorded)} |"
+            )
 
     if report.get("tool_calls"):
         lines.extend([
