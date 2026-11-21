@@ -7,7 +7,6 @@ from html import escape
 
 from opspilot.report_comparison import (
     EndpointChange,
-    EndpointObservation,
     HealthComparison,
     QueueComparison,
 )
@@ -69,7 +68,7 @@ def _evidence_details(item: Mapping[str, object]) -> str:
     )
 
 
-def _endpoint_observation(observation: EndpointObservation | None) -> str:
+def _comparison_observation(observation: Mapping[str, object] | None) -> str:
     if observation is None:
         return "No observation recorded"
     details = _evidence_details({key: value for key, value in observation.items() if value is not None})
@@ -86,8 +85,8 @@ def _endpoint_change_lines(changes: list[EndpointChange]) -> list[str]:
     for change in changes:
         lines.append(
             f"| {change['role'].capitalize()} | {_value(change['source'])} | "
-            f"{change['occurrence']} | {_endpoint_observation(change['before'])} | "
-            f"{_endpoint_observation(change['after'])} |"
+            f"{change['occurrence']} | {_comparison_observation(change['before'])} | "
+            f"{_comparison_observation(change['after'])} |"
         )
     return lines
 
@@ -132,6 +131,18 @@ def render_health_comparison_markdown(comparison: HealthComparison) -> str:
         "",
     ]
     lines.extend(_endpoint_change_lines(comparison["changes"]))
+    if "service_log_changes" in comparison:
+        lines.extend(["", "## Service log changes", ""])
+        changes = comparison["service_log_changes"]
+        if changes:
+            lines.extend(["| Source | Baseline | Follow-up |", "| --- | --- | --- |"])
+            for change in changes:
+                lines.append(
+                    f"| {_value(change['source'])} | {_comparison_observation(change['before'])} | "
+                    f"{_comparison_observation(change['after'])} |"
+                )
+        else:
+            lines.append("No changes in recorded service log observations.")
     return "\n".join(lines) + "\n"
 
 

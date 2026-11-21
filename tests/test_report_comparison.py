@@ -10,7 +10,7 @@ import pytest
 
 from opspilot.adapters.hirehub_snapshot import HireHubSnapshotAdapter
 from opspilot.connectors.rabbitmq import RabbitMQUnavailableEvidence
-from opspilot.core.diagnosis import DiagnosisReport, HealthEvidence, QueueEvidence
+from opspilot.core.diagnosis import DiagnosisReport, HealthEvidence, QueueEvidence, ServiceLogEvidence
 from opspilot.core.target_trace import run_target_trace
 from opspilot.report_comparison import compare_health_reports, compare_queue_reports, compare_trace_reports
 from opspilot.report_markdown import render_health_comparison_markdown, render_queue_comparison_markdown
@@ -309,6 +309,75 @@ def test_compare_http_detects_a_change_in_mysql_error_code(saved_health_pair) ->
     assert markdown.returncode == 0, markdown.stderr
     assert "MySQL error code 2003" in markdown.stdout
     assert "MySQL error code 2013" in markdown.stdout
+
+
+def test_compare_http_includes_service_log_changes_in_json_and_markdown(saved_health_pair) -> None:
+    database, baseline, healthy = saved_health_pair
+    log: ServiceLogEvidence = {
+        "tool": "inspect_service_log", "source": "file:///fixture/service.jsonl",
+        "observed_at": "2026-11-20T06:00:01+00:00", "outcome": "observed", "error_count": 3,
+        "window_start": "2026-11-20T05:55:00+00:00", "window_end": "2026-11-20T06:00:00+00:00",
+    }
+    empty_log: ServiceLogEvidence = {
+        **log, "error_count": 0, "observed_at": "2026-11-20T06:06:01+00:00",
+        "window_start": "2026-11-20T06:01:00+00:00", "window_end": "2026-11-20T06:06:00+00:00",
+    }
+    before = save_report(database, {**baseline, "evidence": [baseline["evidence"][0], log]})
+    after = save_report(database, {**baseline, "evidence": [baseline["evidence"][0], empty_log]})
+    original = database.read_bytes()
+    result = _compare(
+        database, "compare-http", before["task_id"], after["task_id"], "--include-service-log",
+    )
+
+    assert result.returncode == 0, result.stderr
+    comparison = json.loads(result.stdout)
+    assert comparison["changes"] == []
+    change, = comparison["service_log_changes"]
+    assert change["source"] == log["source"]
+    assert change["before"]["error_count"] == 3
+    assert change["before"]["window_end"] == log["window_end"]
+    assert change["after"]["error_count"] == 0
+    assert change["after"]["window_end"] == empty_log["window_end"]
+    assert "service_log_changes" not in compare_health_reports(before, after)
+    assert database.read_bytes() == original
+
+    save_report(database, healthy)
+    markdown = _compare(
+        database, "compare-http-latest", "--service-url", SERVICE_URL,
+        "--include-service-log", "--format", "markdown",
+    )
+    assert markdown.returncode == 0, markdown.stderr
+    assert "## Service log changes" in markdown.stdout
+    assert "Error-level entries 0" in markdown.stdout
+    assert "| No observation recorded |" in markdown.stdout
+
+
+def test_compare_http_logs_preserve_unavailability_and_ignore_window_shifts(saved_health_pair) -> None:
+    _, before, after = saved_health_pair
+    log: ServiceLogEvidence = {
+        "tool": "inspect_service_log", "source": "file:///fixture/service.jsonl",
+        "observed_at": "2026-11-20T06:00:01+00:00", "outcome": "observed", "error_count": 0,
+        "window_start": "2026-11-20T05:55:00+00:00", "window_end": "2026-11-20T06:00:00+00:00",
+    }
+    later: ServiceLogEvidence = {
+        **log, "observed_at": "2026-11-20T06:06:01+00:00",
+        "window_start": "2026-11-20T06:01:00+00:00", "window_end": "2026-11-20T06:06:00+00:00",
+    }
+    before["evidence"].append(log)
+    after["evidence"].append(later)
+    assert compare_health_reports(before, after, include_service_log=True)["service_log_changes"] == []
+
+    later.pop("error_count")
+    later.update(outcome="missing", reason="log_not_found")
+    (change,) = compare_health_reports(before, after, include_service_log=True)["service_log_changes"]
+    assert change["before"]["error_count"] == 0
+    assert change["after"]["outcome"] == "missing"
+    assert change["after"]["error_count"] is None and change["after"]["reason"] == "log_not_found"
+
+    later["source"] = "file:///fixture/replacement.jsonl"
+    removed, added = compare_health_reports(before, after, include_service_log=True)["service_log_changes"]
+    assert removed["source"] == log["source"] and removed["after"] is None
+    assert added["source"] == later["source"] and added["before"] is None
 
 
 def test_compare_http_latest_selects_reports_for_the_main_service(saved_health_pair) -> None:

@@ -69,11 +69,29 @@ class QueueComparison(QueueComparisonFields, total=False):
     consumer_health_changes: list[EndpointChange]
 
 
-class HealthComparison(TypedDict):
+class ServiceLogObservation(TypedDict):
+    outcome: ObservationOutcome
+    error_count: int | None
+    reason: str | None
+    window_start: str
+    window_end: str
+
+
+class ServiceLogChange(TypedDict):
+    source: str
+    before: ServiceLogObservation | None
+    after: ServiceLogObservation | None
+
+
+class HealthComparisonFields(TypedDict):
     before_task_id: str
     after_task_id: str
     service_url: str
     changes: list[EndpointChange]
+
+
+class HealthComparison(HealthComparisonFields, total=False):
+    service_log_changes: list[ServiceLogChange]
 
 
 def _scope(trace: TargetTraceSummary) -> TraceScope:
@@ -225,15 +243,56 @@ def _endpoint_changes(before: EndpointObservations, after: EndpointObservations)
     return changes
 
 
-def compare_health_reports(before: StoredReport, after: StoredReport) -> HealthComparison:
+def _service_logs(evidence: list[Evidence]) -> dict[str, ServiceLogObservation]:
+    observations: dict[str, ServiceLogObservation] = {}
+    for item in evidence:
+        if item["tool"] != "inspect_service_log":
+            continue
+        source = item["source"]
+        if source in observations:
+            raise ValueError("A report contains multiple log observations for the same source.")
+        observations[source] = {
+            "outcome": item["outcome"], "error_count": item.get("error_count"),
+            "reason": item.get("reason"), "window_start": item["window_start"],
+            "window_end": item["window_end"],
+        }
+    return observations
+
+
+def _log_values(
+    observation: ServiceLogObservation | None,
+) -> tuple[ObservationOutcome, int | None, str | None] | None:
+    if observation is None:
+        return None
+    return observation["outcome"], observation["error_count"], observation["reason"]
+
+
+def _service_log_changes(before: list[Evidence], after: list[Evidence]) -> list[ServiceLogChange]:
+    previous = _service_logs(before)
+    current = _service_logs(after)
+    changes: list[ServiceLogChange] = []
+    for source in previous | current:
+        first = previous.get(source)
+        second = current.get(source)
+        if _log_values(first) != _log_values(second):
+            changes.append({"source": source, "before": first, "after": second})
+    return changes
+
+
+def compare_health_reports(
+    before: StoredReport, after: StoredReport, *, include_service_log: bool = False,
+) -> HealthComparison:
     service, before_values = _health_observations(before)
     after_service, after_values = _health_observations(after)
     if service != after_service:
         raise ValueError("Reports must match on the service endpoint URL.")
 
-    return {
+    comparison: HealthComparison = {
         "before_task_id": before["task_id"],
         "after_task_id": after["task_id"],
         "service_url": service,
         "changes": _endpoint_changes(before_values, after_values),
     }
+    if include_service_log:
+        comparison["service_log_changes"] = _service_log_changes(before["evidence"], after["evidence"])
+    return comparison

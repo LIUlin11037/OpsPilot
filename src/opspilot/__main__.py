@@ -497,7 +497,8 @@ def main() -> None:
         comparison_parser.add_argument("before_task_id", help="Task ID of the baseline report.")
         comparison_parser.add_argument("after_task_id", help="Task ID of the follow-up report.")
     queue_comparisons = ("compare-queue", "compare-queue-latest")
-    for command in ("compare-http", "compare-http-latest", *queue_comparisons):
+    http_comparisons = ("compare-http", "compare-http-latest")
+    for command in (*http_comparisons, *queue_comparisons):
         report_comparisons[command].add_argument(
             "--format", choices=("json", "markdown"), default="json"
         )
@@ -511,6 +512,11 @@ def main() -> None:
         report_comparisons[command].add_argument(
             "--include-consumer-health", action="store_true",
             help="Include changes in saved consumer endpoint observations.",
+        )
+    for command in http_comparisons:
+        report_comparisons[command].add_argument(
+            "--include-service-log", action="store_true",
+            help="Include changes in saved service log observations.",
         )
     inspect_queue = commands.add_parser(
         "inspect-queue", help="Read queue metrics from RabbitMQ Management."
@@ -583,7 +589,9 @@ def main() -> None:
                     if args.format == "markdown":
                         markdown = render_queue_comparison_markdown(comparison)
                 else:
-                    comparison = compare_health_reports(before, after)
+                    comparison = compare_health_reports(
+                        before, after, include_service_log=args.include_service_log,
+                    )
                     if args.format == "markdown":
                         markdown = render_health_comparison_markdown(comparison)
             except ValueError as error:

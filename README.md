@@ -158,6 +158,12 @@ python -m venv .venv
 
 Markdown 表格并排显示基准和复查观测，包括健康状态、HTTP 状态码、失败原因以及已记录的 MySQL 错误码。默认输出 JSON，`changes` 列出变化的端点观测。任一侧缺少观测时，Markdown 显示 `No observation recorded`，JSON 以 `null` 表示。相同角色和 URL 的重复检查按 `occurrence` 从 1 开始匹配。
 
+给 `compare-http` 或 `compare-http-latest` 加上 `--include-service-log`，还可按日志来源查看错误条数、读取结果或失败原因的变化。变化条目保留两次观测各自的时间窗口。错误数 `0` 表示成功统计到零条，日志不可用会保留失败原因，缺少整次观测的一侧则显示 `null` 或 `No observation recorded`。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot compare-http-latest --service-url http://127.0.0.1:8080/health --include-service-log --format markdown
+```
+
 ## 模拟诊断
 
 ```powershell
