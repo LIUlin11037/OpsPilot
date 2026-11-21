@@ -37,6 +37,7 @@ from opspilot.report_markdown import (
     render_markdown,
     render_queue_comparison_markdown,
 )
+from opspilot.target_config import RabbitMQTargetConfig, load_target_config
 from opspilot.task_store import StoredReport, list_reports, load_report, save_report
 
 
@@ -67,18 +68,30 @@ def _rabbitmq_connector(
     if args.queue is None:
         parser.error("--queue is required with --management-url")
 
+    config = RabbitMQTargetConfig(
+        management_url=args.management_url,
+        queue=args.queue,
+        vhost="/" if args.vhost is None else args.vhost,
+        timeout_seconds=5.0 if args.timeout is None else args.timeout,
+    )
+    return _connect_rabbitmq(config, parser)
+
+
+def _connect_rabbitmq(
+    config: RabbitMQTargetConfig, parser: argparse.ArgumentParser,
+) -> RabbitMQQueueConnector:
     username = os.getenv("OPSPILOT_RABBITMQ_USER")
     password = os.getenv("OPSPILOT_RABBITMQ_PASSWORD")
     if username is None or password is None:
         parser.error("set OPSPILOT_RABBITMQ_USER and OPSPILOT_RABBITMQ_PASSWORD")
 
     return RabbitMQQueueConnector(
-        management_url=args.management_url,
-        queue=args.queue,
+        management_url=config.management_url,
+        queue=config.queue,
         username=username,
         password=password,
-        vhost="/" if args.vhost is None else args.vhost,
-        timeout_seconds=5.0 if args.timeout is None else args.timeout,
+        vhost=config.vhost,
+        timeout_seconds=config.timeout_seconds,
     )
 
 
@@ -212,20 +225,35 @@ def _run_auto_diagnosis(args: argparse.Namespace, parser: argparse.ArgumentParse
     question = args.question.strip()
     if not question:
         raise ValueError("question must not be empty")
+    direct_options = (args.health_config, args.management_url, args.queue, args.vhost, args.timeout)
+    if args.config is not None and any(value is not None for value in direct_options):
+        raise ValueError("--config cannot be combined with direct target options")
     if (args.management_url is None) != (args.queue is None):
         raise ValueError("--management-url and --queue must be supplied together")
     if args.management_url is None and (args.vhost is not None or args.timeout is not None):
         raise ValueError("--vhost and --timeout require --management-url")
 
     routing = select_diagnosis_route(question)
+    target = load_target_config(args.config) if args.config is not None else None
     if routing["workflow"] == "http_health":
-        if args.health_config is None:
-            raise ValueError("HTTP health symptoms matched. Supply --health-config.")
-        report = _run_configured_health(question, load_health_config(args.health_config))
+        config = target.health if target is not None else None
+        if args.health_config is not None:
+            config = load_health_config(args.health_config)
+        if config is None:
+            raise ValueError(
+                "HTTP health symptoms matched. Supply --health-config or a health section in --config."
+            )
+        report = _run_configured_health(question, config)
     else:
-        if args.management_url is None:
-            raise ValueError("Queue symptoms matched. Supply --management-url and --queue.")
-        report = run_queue_diagnosis(question, _rabbitmq_connector(args, parser))
+        if target is not None and target.rabbitmq is not None:
+            connector = _connect_rabbitmq(target.rabbitmq, parser)
+        elif args.management_url is not None:
+            connector = _rabbitmq_connector(args, parser)
+        else:
+            raise ValueError(
+                "Queue symptoms matched. Supply --management-url and --queue or a rabbitmq section in --config."
+            )
+        report = run_queue_diagnosis(question, connector)
 
     report["routing"] = routing
     return report
@@ -312,6 +340,7 @@ def main() -> None:
     auto_diagnose = commands.add_parser(
         "diagnose-auto", help="Choose a configured HTTP health or RabbitMQ queue workflow.",
     )
+    auto_diagnose.add_argument("--config", type=Path, help="JSON file with workflows for a target.")
     auto_diagnose.add_argument("--health-config", type=Path, help="JSON file with health endpoints.")
     auto_diagnose.add_argument("--management-url", help="RabbitMQ Management API base URL.")
     _add_queue_options(auto_diagnose)

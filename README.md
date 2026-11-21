@@ -15,7 +15,29 @@ python -m venv .venv
 
 ## 按故障描述选择诊断流程
 
-`diagnose-auto` 根据描述中的中英文症状词，在 HTTP 健康检查和 RabbitMQ 队列诊断之间选择一个已配置的流程。HTTP 读取现有的健康配置文件，队列读取配置的 Management API 和虚拟主机。命令只调用选中的流程，并在报告的 `routing` 记录流程名称和匹配词。
+`diagnose-auto` 根据描述中的中英文症状词，在 HTTP 健康检查和 RabbitMQ 队列诊断之间选择一个已配置的流程。HTTP 流程使用配置的服务和依赖端点，队列流程使用指定的 Management API 和虚拟主机。命令只调用选中的流程，并在报告的 `routing` 记录流程名称和匹配词。
+
+把常用目标保存为 UTF-8 的 `target.json`。可以配置其中一类或两类流程。`health` 使用 HTTP 健康配置字段，`rabbitmq` 需要管理地址与队列名，虚拟主机默认为 `/`，超时默认为 5 秒。RabbitMQ 和 MySQL 凭据通过环境变量提供。
+
+```json
+{
+  "health": {
+    "service_url": "http://127.0.0.1:8080/health",
+    "dependency_urls": ["http://127.0.0.1:8081/health"]
+  },
+  "rabbitmq": {
+    "management_url": "http://127.0.0.1:15672",
+    "queue": "orders",
+    "vhost": "/"
+  }
+}
+```
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot diagnose-auto --config .\target.json "RabbitMQ 队列积压"
+```
+
+临时排查也可以直接提供连接选项。
 
 ```powershell
 .\.venv\Scripts\python.exe -m opspilot diagnose-auto --health-config .\health.json --management-url http://127.0.0.1:15672 --queue "orders" "RabbitMQ 队列积压"
