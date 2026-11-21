@@ -1,6 +1,7 @@
-"""Select a workflow from symptom terms or an exact message lookup."""
+"""Select a workflow from an explicit choice, a message ID, or symptom terms."""
 
 import re
+from typing import Literal
 from unicodedata import normalize
 
 from opspilot.core.diagnosis import DiagnosisRoute, DiagnosisWorkflow
@@ -20,22 +21,30 @@ _SYMPTOMS: dict[DiagnosisWorkflow, re.Pattern[str]] = {
 }
 
 
-def select_diagnosis_route(question: str, *, message_lookup: bool = False) -> DiagnosisRoute:
+def select_diagnosis_route(
+    question: str, *, message_lookup: bool = False, workflow: Literal["queue", "http_health"] | None = None,
+) -> DiagnosisRoute:
     description = normalize("NFKC", question)
     matches = {
         workflow: list(dict.fromkeys(match.group().casefold() for match in pattern.finditer(description)))
         for workflow, pattern in _SYMPTOMS.items()
     }
+    if workflow is not None:
+        if message_lookup and workflow != "queue":
+            raise ValueError("--message-id requires --workflow queue.")
+        return {"workflow": workflow, "matched_terms": matches[workflow], "selected_by": "workflow"}
     if message_lookup:
         if matches["http_health"]:
-            raise ValueError("HTTP health symptoms conflict with --message-id. Focus on the message lookup.")
+            raise ValueError(
+                "HTTP health symptoms conflict with --message-id. Focus on the message or use --workflow queue."
+            )
         return {
             "workflow": "queue", "matched_terms": matches["queue"], "selected_by": "message_id",
         }
     routes = [workflow for workflow, terms in matches.items() if terms]
     if not routes:
-        raise ValueError("Describe a queue symptom or an HTTP health symptom, or choose an explicit command.")
+        raise ValueError("Describe a queue symptom or an HTTP health symptom, or pass --workflow.")
     if len(routes) > 1:
-        raise ValueError("Both queue and HTTP symptoms matched. Focus on one symptom or choose an explicit command.")
-    workflow, = routes
-    return {"workflow": workflow, "matched_terms": matches[workflow]}
+        raise ValueError("Both queue and HTTP symptoms matched. Focus on one symptom or pass --workflow.")
+    selected, = routes
+    return {"workflow": selected, "matched_terms": matches[selected]}

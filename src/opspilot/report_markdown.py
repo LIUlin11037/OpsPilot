@@ -14,7 +14,11 @@ from opspilot.report_comparison import (
 from opspilot.task_store import StoredReport
 
 _MARKDOWN = re.compile(r"([\\`*_\[\]|~])")
-_ROUTE_BASES = {"message_id": "Requested message ID", "delivery_id": "Requested delivery ID"}
+_ROUTE_BASES = {
+    "message_id": "Requested message ID",
+    "delivery_id": "Requested delivery ID",
+    "workflow": "Explicit workflow",
+}
 _PLAN_CONDITIONS = {
     "always": "Always",
     "service_unhealthy_or_unknown": "Service unhealthy or unknown",

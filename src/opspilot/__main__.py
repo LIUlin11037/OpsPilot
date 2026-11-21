@@ -261,6 +261,8 @@ def _prepare_auto_diagnosis(
         if args.config is None:
             raise ValueError("--message-id requires --config with a RabbitMQ processing source")
     if args.delivery_id is not None:
+        if args.workflow is not None:
+            raise ValueError("--delivery-id selects the snapshot workflow and cannot be combined with --workflow")
         if args.delivery_id <= 0:
             raise ValueError("--delivery-id must be positive")
         if args.config is None:
@@ -289,7 +291,9 @@ def _prepare_auto_diagnosis(
             run_target_trace, question, args.delivery_id, HireHubSnapshotAdapter(target.hirehub_snapshot),
         )
 
-    routing = select_diagnosis_route(question, message_lookup=args.message_id is not None)
+    routing = select_diagnosis_route(
+        question, message_lookup=args.message_id is not None, workflow=args.workflow,
+    )
     target = load_target_config(args.config) if args.config is not None else None
     if routing["workflow"] == "http_health":
         config = target.health if target is not None else None
@@ -435,6 +439,9 @@ def main() -> None:
     auto_diagnose.add_argument("--health-config", type=Path, help="JSON file with health endpoints.")
     auto_diagnose.add_argument("--management-url", help="RabbitMQ Management API base URL.")
     auto_diagnose.add_argument("--plan", action="store_true", help="Show the selected workflow and its configured checks.")
+    auto_diagnose.add_argument(
+        "--workflow", choices=("http_health", "queue"), help="Select a workflow explicitly.",
+    )
     _add_queue_options(auto_diagnose)
     auto_scope = auto_diagnose.add_mutually_exclusive_group()
     auto_scope.add_argument("--message-id", help="Look up an exact message in the configured processing source.")

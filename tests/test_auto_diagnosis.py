@@ -100,6 +100,10 @@ def test_auto_diagnosis_runs_and_saves_the_selected_workflow(
         (["--delivery-id", "0"], "投递通知没收到", "--delivery-id must be positive"),
         (["--message-id", "msg-101", "--delivery-id", "1001"],
          "投递通知没收到", "not allowed with argument --message-id"),
+        (["--config", "unused.json", "--message-id", "msg-101", "--workflow", "http_health"],
+         "Check delivery", "--message-id requires --workflow queue"),
+        (["--config", "unused.json", "--delivery-id", "1001", "--workflow", "queue"],
+         "Trace delivery", "cannot be combined with --workflow"),
     ],
 )
 def test_auto_diagnosis_requires_clear_and_configured_symptoms(options, question, error) -> None:
@@ -123,6 +127,51 @@ def test_auto_diagnosis_requires_the_selected_section_in_target_file() -> None:
         assert result.returncode == 2
         assert "a health section in --config" in result.stderr
         assert not (Path(directory) / ".opspilot").exists()
+
+
+@pytest.mark.parametrize(
+    ("workflow", "terms", "expected_request"),
+    [
+        ("http_health", ["http"], "/health"),
+        ("queue", ["队列", "积压"], "/api/queues/%2F/orders"),
+    ],
+)
+def test_auto_explicit_workflow_limits_requests_and_is_recorded_in_report(
+    processing_service, monkeypatch, workflow, terms, expected_request,
+) -> None:
+    question = "HTTP 503，队列积压"
+    metrics = b'{"messages_ready": 3, "messages_unacknowledged": 0, "consumers": 1}'
+
+    def respond(path):
+        return (503, b"") if path == "/health" else (200, metrics)
+
+    monkeypatch.setenv("OPSPILOT_RABBITMQ_USER", "test-reader")
+    monkeypatch.setenv("OPSPILOT_RABBITMQ_PASSWORD", "test-password")
+    with TemporaryDirectory(prefix="opspilot-explicit-workflow-") as directory:
+        config = Path(directory) / "target.json"
+        with processing_service(respond) as (endpoint, requests):
+            base = endpoint.removesuffix("/processing")
+            config.write_text(json.dumps({
+                "health": {"service_url": f"{base}/health"},
+                "rabbitmq": {"management_url": base, "queue": "orders"},
+            }), encoding="utf-8")
+            options = ("diagnose-auto", "--config", str(config), "--workflow", workflow)
+            preview = _cli(directory, *options, "--plan", question)
+            assert preview.returncode == 0, preview.stderr
+            assert requests == []
+            result = _cli(directory, *options, question)
+
+        assert result.returncode == 0, result.stderr
+        plan = json.loads(preview.stdout)
+        report = json.loads(result.stdout)
+        assert report["routing"] == plan["routing"] == {
+            "workflow": workflow, "matched_terms": terms, "selected_by": "workflow",
+        }
+        assert report["planned_checks"] == plan["checks"]
+        assert requests == [expected_request]
+        markdown = _cli(directory, "report", report["task_id"], "--format", "markdown")
+        assert markdown.returncode == 0, markdown.stderr
+        assert "**Selection basis** Explicit workflow" in markdown.stdout
 
 
 @pytest.mark.parametrize(
@@ -275,7 +324,10 @@ def test_auto_diagnosis_can_lookup_exact_message_independently_of_queue_activity
     processing_service, monkeypatch, queue_status,
 ) -> None:
     message_id = "Order+42 /雪"
-    question = "这条消息处理了吗？"
+    explicit_workflow = queue_status == 403
+    options = ("--workflow", "queue") if explicit_workflow else ()
+    question = "HTTP 503，这条消息处理了吗？" if explicit_workflow else "这条消息处理了吗？"
+    selection_basis = "workflow" if explicit_workflow else "message_id"
     queue_path = "/api/queues/%2F/orders"
     metrics = b'{"messages_ready": 0, "messages_unacknowledged": 0, "consumers": 1}'
     records = json.dumps([
@@ -307,12 +359,12 @@ def test_auto_diagnosis_can_lookup_exact_message_independently_of_queue_activity
                 },
             }), encoding="utf-8")
             result = _cli(
-                directory, "diagnose-auto", "--config", str(config), "--message-id", message_id, question,
+                directory, "diagnose-auto", "--config", str(config), "--message-id", message_id, *options, question,
             )
 
         assert result.returncode == 0, result.stderr
         report = json.loads(result.stdout)
-        assert report["routing"] == {"workflow": "queue", "matched_terms": [], "selected_by": "message_id"}
+        assert report["routing"] == {"workflow": "queue", "matched_terms": [], "selected_by": selection_basis}
         assert report["requested_message_id"] == message_id
         assert report["planned_checks"][-1] == {
             "tool": "inspect_processing", "when": "always", "count": 1,
@@ -327,7 +379,8 @@ def test_auto_diagnosis_can_lookup_exact_message_independently_of_queue_activity
         assert parse_qs(url.query) == {"queue": ["orders"], "vhost": ["/"], "message_id": [message_id]}
         markdown = _cli(directory, "report", report["task_id"], "--format", "markdown")
         assert markdown.returncode == 0, markdown.stderr
-        assert "**Selection basis** Requested message ID" in markdown.stdout
+        expected_basis = "Explicit workflow" if explicit_workflow else "Requested message ID"
+        assert f"**Selection basis** {expected_basis}" in markdown.stdout
         assert f"**Requested message ID** {message_id}" in markdown.stdout
 
 
