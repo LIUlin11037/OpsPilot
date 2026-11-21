@@ -46,6 +46,10 @@ from opspilot.target_config import RabbitMQTargetConfig, load_target_config
 from opspilot.task_store import StoredReport, list_reports, load_report, save_report
 
 
+_LOG_CONFIG_REQUIRED = "--check-service-log requires service_log_path in the health configuration"
+_LOG_WORKFLOW_REQUIRED = "--check-service-log requires the HTTP health workflow"
+
+
 def _add_queue_options(
     parser: argparse.ArgumentParser, *, require_queue: bool = False, fixed_queue: str | None = None
 ) -> None:
@@ -224,7 +228,10 @@ def _health_config(args: argparse.Namespace) -> HealthConfig:
 
 def _run_configured_health(
     question: str, config: HealthConfig, *, check_dependencies: bool = False,
+    check_service_log: bool = False,
 ) -> DiagnosisReport:
+    if check_service_log and config.service_log_path is None:
+        raise ValueError(_LOG_CONFIG_REQUIRED)
     service = HttpHealthConnector(config.service_url, config.timeout_seconds)
     dependencies: list[HealthTool] = [
         HttpHealthConnector(url, config.timeout_seconds) for url in config.dependency_urls
@@ -241,6 +248,7 @@ def _run_configured_health(
     return run_health_diagnosis(
         question, service, dependencies, check_dependencies=check_dependencies,
         service_log=JsonlServiceLogConnector(config.service_log_path) if config.service_log_path is not None else None,
+        check_service_log=check_service_log,
     )
 
 
@@ -278,6 +286,8 @@ def _prepare_auto_diagnosis(
         raise ValueError("--vhost and --timeout require --management-url")
 
     if args.delivery_id is not None:
+        if args.check_service_log:
+            raise ValueError(_LOG_WORKFLOW_REQUIRED)
         target = load_target_config(args.config)
         if target.hirehub_snapshot is None:
             raise ValueError("--delivery-id requires hirehub.snapshot in --config")
@@ -296,6 +306,8 @@ def _prepare_auto_diagnosis(
     routing = select_diagnosis_route(
         question, message_lookup=args.message_id is not None, workflow=args.workflow,
     )
+    if args.check_service_log and routing["workflow"] != "http_health":
+        raise ValueError(_LOG_WORKFLOW_REQUIRED)
     target = load_target_config(args.config) if args.config is not None else None
     if routing["workflow"] == "http_health":
         config = target.health if target is not None else None
@@ -305,9 +317,15 @@ def _prepare_auto_diagnosis(
             raise ValueError(
                 "HTTP health symptoms matched. Supply --health-config or a health section in --config."
             )
+        if args.check_service_log and config.service_log_path is None:
+            raise ValueError(_LOG_CONFIG_REQUIRED)
         checks: list[PlannedCheck] = [{"tool": "inspect_service_health", "when": "always", "count": 1}]
         if config.service_log_path is not None:
-            checks.append({"tool": "inspect_service_log", "when": "service_unhealthy", "count": 1})
+            checks.append({
+                "tool": "inspect_service_log",
+                "when": "always" if args.check_service_log else "service_unhealthy",
+                "count": 1,
+            })
         dependency_count = (
             len(config.dependency_urls) + len(config.redis_dependency_urls) + len(config.mysql_dependency_urls)
         )
@@ -319,7 +337,7 @@ def _prepare_auto_diagnosis(
         plan = {
             "question": question, "routing": routing, "scope": {}, "checks": checks,
         }
-        return plan, partial(_run_configured_health, question, config)
+        return plan, partial(_run_configured_health, question, config, check_service_log=args.check_service_log)
 
     rabbitmq = target.rabbitmq if target is not None else None
     if args.management_url is not None:
@@ -451,6 +469,11 @@ def main() -> None:
     auto_scope.add_argument("--message-id", help="Look up an exact message in the configured processing source.")
     auto_scope.add_argument("--delivery-id", type=int, help="Trace a delivery in the configured HireHub snapshot.")
     auto_diagnose.add_argument("question", help="Incident description.")
+    for health_parser in (health, auto_diagnose):
+        health_parser.add_argument(
+            "--check-service-log", action="store_true",
+            help="Check the configured service log regardless of HTTP health.",
+        )
     hirehub = commands.add_parser(
         "diagnose-hirehub", help="Diagnose a HireHub delivery with live reads or a snapshot."
     )
@@ -610,6 +633,7 @@ def main() -> None:
             try:
                 report = _run_configured_health(
                     question, _health_config(args), check_dependencies=args.check_dependencies,
+                    check_service_log=args.check_service_log,
                 )
             except ValueError as error:
                 health.error(str(error))

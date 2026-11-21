@@ -70,12 +70,18 @@ def _check_service_log(tool: ServiceLogTool, state: _HealthState) -> _HealthStat
 
 
 def _after_service(
-    state: _HealthState, *, has_log: bool, has_dependencies: bool, check_dependencies: bool,
+    state: _HealthState, *, has_log: bool, check_service_log: bool,
+    has_dependencies: bool, check_dependencies: bool,
 ) -> Literal["check_service_log", "check_dependencies", "report"]:
-    health = state["service"]["health"]
-    if has_log and health == "unhealthy":
+    if has_log and (check_service_log or state["service"]["health"] == "unhealthy"):
         return "check_service_log"
-    if has_dependencies and (check_dependencies or health != "healthy"):
+    return _after_log(state, has_dependencies=has_dependencies, check_dependencies=check_dependencies)
+
+
+def _after_log(
+    state: _HealthState, *, has_dependencies: bool, check_dependencies: bool,
+) -> Literal["check_dependencies", "report"]:
+    if has_dependencies and (check_dependencies or state["service"]["health"] != "healthy"):
         return "check_dependencies"
     return "report"
 
@@ -98,9 +104,11 @@ def _write_report(state: _HealthState) -> _HealthState:
         if len(dependencies) > 1:
             label = f"{label} {dependency['source']}"
         summary.append(f"{label} health is {dependency['health']}.")
-    healthy = service["health"] == "healthy" and all(
+    endpoints_healthy = service["health"] == "healthy" and all(
         dependency["health"] == "healthy" for dependency in dependencies
     )
+    logs_clear = service_log is None or service_log.get("error_count") == 0
+    healthy = endpoints_healthy and logs_clear
     if not healthy:
         summary.append("The cause is undetermined.")
     return {"report": {
@@ -120,7 +128,10 @@ def run_health_diagnosis(
     *,
     check_dependencies: bool = False,
     service_log: ServiceLogTool | None = None,
+    check_service_log: bool = False,
 ) -> DiagnosisReport:
+    if check_service_log and service_log is None:
+        raise ValueError("An explicit service log check requires a configured log source.")
     if isinstance(dependency, Sequence):
         dependency_tools = tuple(dependency)
     else:
@@ -138,13 +149,20 @@ def run_health_diagnosis(
         routes["check_dependencies"] = "check_dependencies"
     if service_log is not None:
         graph.add_node("check_service_log", partial(_check_service_log, service_log))
-        graph.add_edge("check_service_log", "check_dependencies" if dependency_tools else "report")
+        graph.add_conditional_edges(
+            "check_service_log",
+            partial(
+                _after_log, has_dependencies=bool(dependency_tools),
+                check_dependencies=check_dependencies,
+            ),
+            dict(routes),
+        )
         routes["check_service_log"] = "check_service_log"
     graph.add_conditional_edges(
         "check_service",
         partial(
             _after_service, has_log=service_log is not None, has_dependencies=bool(dependency_tools),
-            check_dependencies=check_dependencies,
+            check_dependencies=check_dependencies, check_service_log=check_service_log,
         ),
         routes,
     )
