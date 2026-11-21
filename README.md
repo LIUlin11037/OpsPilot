@@ -174,6 +174,8 @@ Markdown 和 JSON 都显示两次报告保存的整体诊断状态。JSON 使用
 
 Markdown 表格并排显示基准和复查观测，包括健康状态、HTTP 状态码、失败原因以及已记录的 MySQL 错误码。默认输出 JSON，`changes` 列出变化的端点观测。任一侧缺少观测时，Markdown 显示 `No observation recorded`，JSON 以 `null` 表示。相同角色和 URL 的重复检查按 `occurrence` 从 1 开始匹配。
 
+如果同一端点在两份报告中有相同的异常或未知结果，对比会在 Markdown 的 `Unchanged endpoint issues` 小节和 JSON 的 `unchanged_endpoint_issues` 字段保留该端点及其观测。例如，主服务恢复到 204 后，仍可以看到在基准和复查中均超时的 Redis 依赖。
+
 给 `compare-http` 或 `compare-http-latest` 加上 `--include-service-log`，还可按日志来源查看错误条数、读取结果或失败原因的变化。变化条目保留两次观测各自的时间窗口。错误数 `0` 表示成功统计到零条，日志不可用会保留失败原因，缺少整次观测的一侧则显示 `null` 或 `No observation recorded`。
 
 ```powershell

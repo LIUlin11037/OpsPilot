@@ -289,20 +289,42 @@ def test_compare_http_renders_markdown_with_missing_observations(saved_health_pa
     assert database.read_bytes() == original
 
 
-def test_compare_http_preserves_undetermined_status_when_a_dependency_still_fails(saved_health_pair) -> None:
+def test_compare_http_shows_unchanged_dependency_issues_after_service_recovers(saved_health_pair) -> None:
     database, before, healthy = saved_health_pair
+    stable_dependency: HealthEvidence = {
+        "tool": "inspect_dependency_health", "source": "http://127.0.0.1:8081/health",
+        "observed_at": "2026-11-20T06:00:01+00:00", "outcome": "observed", "health": "healthy", "http_status": 204,
+    }
+    before = save_report(database, {**before, "evidence": [*before["evidence"], stable_dependency]})
     after = save_report(database, {
-        **before, "evidence": [healthy["evidence"][0], before["evidence"][1]],
+        **before, "evidence": [
+            healthy["evidence"][0],
+            {**before["evidence"][1], "observed_at": "2026-11-20T06:06:01+00:00"},
+            stable_dependency,
+        ],
     })
 
-    comparison = compare_health_reports(before, after)
+    result = _compare(database, "compare-http-latest", "--service-url", SERVICE_URL)
+    assert result.returncode == 0, result.stderr
+    comparison = json.loads(result.stdout)
 
     service, = comparison["changes"]
     assert service["role"] == "service"
     assert comparison["before_status"] == comparison["after_status"] == "undetermined"
-    markdown = render_health_comparison_markdown(comparison)
-    assert "HTTP status 204" in markdown
-    assert "**Follow-up diagnosis status** undetermined" in markdown
+    assert comparison["unchanged_endpoint_issues"] == [{
+        "role": "dependency", "source": REDIS_URL, "occurrence": 1,
+        "observation": {"health": "unknown", "outcome": "timeout", "http_status": None, "reason": "request_timeout"},
+    }]
+
+    markdown = _compare(database, "compare-http", before["task_id"], after["task_id"], "--format", "markdown")
+    assert markdown.returncode == 0, markdown.stderr
+    assert "HTTP status 204" in markdown.stdout
+    assert "**Follow-up diagnosis status** undetermined" in markdown.stdout
+    assert "## Unchanged endpoint issues" in markdown.stdout
+    assert (
+        f"| Dependency | {REDIS_URL} | 1 | Outcome timeout, Health unknown, "
+        r"Reason request\_timeout |"
+    ) in markdown.stdout
 
 
 def test_compare_http_detects_a_change_in_mysql_error_code(saved_health_pair) -> None:
@@ -320,7 +342,10 @@ def test_compare_http_detects_a_change_in_mysql_error_code(saved_health_pair) ->
 
     result = _compare(database, "compare-http", *ids)
     assert result.returncode == 0, result.stderr
-    change, = json.loads(result.stdout)["changes"]
+    comparison = json.loads(result.stdout)
+    issue, = comparison["unchanged_endpoint_issues"]
+    assert issue["role"] == "service" and issue["source"] == SERVICE_URL
+    change, = comparison["changes"]
     assert change["before"]["mysql_error_code"] == 2003
     assert change["after"]["mysql_error_code"] == 2013
 
@@ -442,11 +467,11 @@ def test_compare_http_latest_rejects_blank_service_url() -> None:
 
 
 def test_health_comparison_markdown_describes_unchanged_observations(saved_health_pair) -> None:
-    _, before, _ = saved_health_pair
-    markdown = render_health_comparison_markdown(compare_health_reports(before, before))
+    _, _, healthy = saved_health_pair
+    markdown = render_health_comparison_markdown(compare_health_reports(healthy, healthy))
 
     assert "No changes in recorded endpoint observations." in markdown
-    assert "healthy" not in markdown
+    assert "## Unchanged endpoint issues" not in markdown
 
 
 def test_compare_http_preserves_repeated_dependency_occurrences(saved_health_pair) -> None:

@@ -58,6 +58,13 @@ class EndpointChange(TypedDict):
     after: EndpointObservation | None
 
 
+class EndpointIssue(TypedDict):
+    role: HealthRole
+    source: str
+    occurrence: int
+    observation: EndpointObservation
+
+
 class QueueComparisonFields(TypedDict):
     before_task_id: str
     after_task_id: str
@@ -93,6 +100,7 @@ class HealthComparisonFields(TypedDict):
 
 
 class HealthComparison(HealthComparisonFields, total=False):
+    unchanged_endpoint_issues: list[EndpointIssue]
     service_log_changes: list[ServiceLogChange]
 
 
@@ -297,6 +305,13 @@ def compare_health_reports(
         "service_url": service,
         "changes": _endpoint_changes(before_values, after_values),
     }
+    unchanged_endpoint_issues: list[EndpointIssue] = [
+        {"role": role, "source": source, "occurrence": occurrence, "observation": observation}
+        for (role, source, occurrence), observation in after_values.items()
+        if observation["health"] != "healthy" and before_values.get((role, source, occurrence)) == observation
+    ]
+    if unchanged_endpoint_issues:
+        comparison["unchanged_endpoint_issues"] = unchanged_endpoint_issues
     if include_service_log:
         comparison["service_log_changes"] = _service_log_changes(before["evidence"], after["evidence"])
     return comparison
