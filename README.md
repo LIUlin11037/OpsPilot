@@ -87,7 +87,9 @@ python -m venv .venv
 .\.venv\Scripts\python.exe examples/auto_diagnosis_demo.py
 ```
 
-每次运行都会在 `.opspilot/demo/` 下创建一个独立目录，保存一个含 4 份报告的 SQLite 数据库和两份 Markdown 对比。打开 `health-comparison.md` 可以看到服务从 503 恢复到 204。打开 `queue-comparison.md` 可以看到待投递消息从 3 降到 0，以及清空后缺少消费者端点观测。若需回看单份报告，将演示输出的数据库路径传给 `opspilot --db PATH reports`。
+每次运行都会在 `.opspilot/demo/` 下创建一个独立目录，保存一个含 4 份报告的 SQLite 数据库和两份 Markdown 对比。打开 `health-comparison.md` 可以看到服务从 503 恢复到 204，日志错误从 1 条降到 0 条。演示在故障和恢复阶段分别生成一份日志快照，恢复时主动复查日志，无需等待故障日志退出五分钟统计窗口。
+
+打开 `queue-comparison.md` 可以看到待投递消息从 3 降到 0，以及清空后缺少消费者端点观测。若需回看单份报告，将演示输出的数据库路径传给 `opspilot --db PATH reports`。
 
 ## HTTP 健康诊断
 

@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import mkdtemp
@@ -58,6 +59,7 @@ class DemoHandler(BaseHTTPRequestHandler):
 def run_demo(directory: Path) -> None:
     database = directory / "reports.sqlite3"
     config = directory / "target.json"
+    service_log = directory / "service.jsonl"
     env = {
         **os.environ,
         "OPSPILOT_RABBITMQ_USER": "demo-reader",
@@ -78,7 +80,10 @@ def run_demo(directory: Path) -> None:
         service_url = f"{base_url}/service/health"
         consumer_url = f"{base_url}/consumer/health"
         config.write_text(json.dumps({
-            "health": {"service_url": service_url, "dependency_urls": [consumer_url]},
+            "health": {
+                "service_url": service_url, "dependency_urls": [consumer_url],
+                "service_log_path": service_log.name,
+            },
             "rabbitmq": {
                 "management_url": base_url, "queue": QUEUE_NAME,
                 "consumer_health_url": consumer_url, "processing_url": f"{base_url}/processing",
@@ -89,13 +94,22 @@ def run_demo(directory: Path) -> None:
         try:
             for recovered in (False, True):
                 server.recovered = recovered
-                run_cli("diagnose-auto", "--config", str(config), "Check HTTP health")
+                if recovered:
+                    service_log.write_text("", encoding="utf-8")
+                else:
+                    entry = {"timestamp": datetime.now(timezone.utc).isoformat(), "level": "ERROR"}
+                    service_log.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+                log_options = ("--check-service-log",) if recovered else ()
+                run_cli("diagnose-auto", "--config", str(config), *log_options, "Check HTTP health")
                 run_cli("diagnose-auto", "--config", str(config), "Check the queue backlog")
         finally:
             server.shutdown()
             thread.join()
 
-    health = run_cli("compare-http-latest", "--service-url", service_url, "--format", "markdown")
+    health = run_cli(
+        "compare-http-latest", "--service-url", service_url,
+        "--include-service-log", "--format", "markdown",
+    )
     queue = run_cli(
         "compare-queue-latest", "--queue-source", base_url + QUEUE_PATH,
         "--include-consumer-health", "--format", "markdown",
