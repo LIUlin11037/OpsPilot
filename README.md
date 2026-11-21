@@ -79,6 +79,16 @@ python -m venv .venv
 
 正式诊断会把计划中的检查写入报告的 `planned_checks`。用 `report TASK_ID --format markdown` 回看时，可以对照配置的调用次数与实际记录的调用次数。实际调用即使超时或返回不可用，也计入记录，具体结果见 `tool_calls`。
 
+### 本地故障与恢复演示
+
+在仓库根目录运行以下命令，演示会启动一个只监听本机的模拟服务，先生成故障报告，再切换到恢复状态生成复查报告。
+
+```powershell
+.\.venv\Scripts\python.exe examples/auto_diagnosis_demo.py
+```
+
+每次运行都会在 `.opspilot/demo/` 下创建一个独立目录，保存一个含 4 份报告的 SQLite 数据库和两份 Markdown 对比。打开 `health-comparison.md` 可以看到服务从 503 恢复到 204。打开 `queue-comparison.md` 可以看到待投递消息从 3 降到 0，以及清空后缺少消费者端点观测。若需回看单份报告，将演示输出的数据库路径传给 `opspilot --db PATH reports`。
+
 ## HTTP 健康诊断
 
 将服务和可选依赖的健康检查 URL 提供给 `diagnose-http`。默认在服务端点异常或健康状态未知时检查已配置的依赖。
