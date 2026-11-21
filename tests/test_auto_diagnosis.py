@@ -89,6 +89,11 @@ def test_auto_diagnosis_runs_and_saves_the_selected_workflow(
         ([], "HTTP health check", "Supply --health-config"),
         (["--config", "unused.json", "--health-config", "health.json"],
          "HTTP health check", "--config cannot be combined with direct target options"),
+        (["--message-id", "msg-101"], "Check this delivery", "--message-id requires --config"),
+        (["--config", "unused.json", "--message-id", " "],
+         "Check this delivery", "--message-id must not be empty"),
+        (["--config", "unused.json", "--message-id", "msg-101"],
+         "HTTP health check", "HTTP health symptoms conflict with --message-id"),
     ],
 )
 def test_auto_diagnosis_requires_clear_and_configured_symptoms(options, question, error) -> None:
@@ -181,6 +186,80 @@ def test_target_queue_uses_configured_checks_only_when_queue_activity_is_observe
     else:
         assert requests == [queue_path, "/consumer-health"]
         assert processing["source"] == record_path.as_uri()
+
+
+@pytest.mark.parametrize("queue_status", [200, 403])
+def test_auto_diagnosis_can_lookup_exact_message_independently_of_queue_activity(
+    processing_service, monkeypatch, queue_status,
+) -> None:
+    message_id = "Order+42 /雪"
+    question = "这条消息处理了吗？"
+    queue_path = "/api/queues/%2F/orders"
+    metrics = b'{"messages_ready": 0, "messages_unacknowledged": 0, "consumers": 1}'
+    records = json.dumps([
+        {
+            "queue": "orders", "vhost": "/", "message_id": message_id,
+            "result": "failed", "attempted_at": "2026-11-19T03:00:00Z",
+        },
+        {
+            "queue": "orders", "vhost": "/", "message_id": "another-message",
+            "result": "succeeded", "attempted_at": "2026-11-19T03:01:00Z",
+        },
+    ]).encode()
+
+    def respond(path):
+        if path == queue_path:
+            return queue_status, metrics
+        return 200, records
+
+    monkeypatch.setenv("OPSPILOT_RABBITMQ_USER", "test-reader")
+    monkeypatch.setenv("OPSPILOT_RABBITMQ_PASSWORD", "test-password")
+    with TemporaryDirectory(prefix="opspilot-target-message-") as directory:
+        config = Path(directory) / "target.json"
+        with processing_service(respond) as (endpoint, requests):
+            base = endpoint.removesuffix("/processing")
+            config.write_text(json.dumps({
+                "rabbitmq": {
+                    "management_url": base, "queue": "orders", "processing_url": endpoint,
+                    "consumer_health_url": f"{base}/health",
+                },
+            }), encoding="utf-8")
+            result = _cli(
+                directory, "diagnose-auto", "--config", str(config), "--message-id", message_id, question,
+            )
+
+        assert result.returncode == 0, result.stderr
+        report = json.loads(result.stdout)
+        assert report["routing"] == {"workflow": "queue", "matched_terms": [], "selected_by": "message_id"}
+        assert report["requested_message_id"] == message_id
+        queue, processing = report["evidence"]
+        assert queue["outcome"] == ("observed" if queue_status == 200 else "missing")
+        assert processing["message_id"] == message_id and processing["result"] == "failed"
+        queue_request, processing_request = requests
+        assert queue_request == queue_path
+        url = urlsplit(processing_request)
+        assert url.path == "/processing"
+        assert parse_qs(url.query) == {"queue": ["orders"], "vhost": ["/"], "message_id": [message_id]}
+        markdown = _cli(directory, "report", report["task_id"], "--format", "markdown")
+        assert markdown.returncode == 0, markdown.stderr
+        assert "**Selection basis** Requested message ID" in markdown.stdout
+        assert f"**Requested message ID** {message_id}" in markdown.stdout
+
+
+def test_auto_message_lookup_requires_processing_source() -> None:
+    with TemporaryDirectory(prefix="opspilot-target-message-") as directory:
+        config = Path(directory) / "target.json"
+        config.write_text(
+            '{"rabbitmq": {"management_url": "http://localhost:15672", "queue": "orders"}}',
+            encoding="utf-8",
+        )
+        result = _cli(
+            directory, "diagnose-auto", "--config", str(config), "--message-id", "msg-101", "Check delivery",
+        )
+
+        assert result.returncode == 2
+        assert "--message-id requires rabbitmq.processing_url or rabbitmq.processing_record" in result.stderr
+        assert not (Path(directory) / ".opspilot").exists()
 
 
 @pytest.mark.parametrize(

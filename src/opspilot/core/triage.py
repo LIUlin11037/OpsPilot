@@ -1,4 +1,4 @@
-"""Select a supported diagnostic workflow from explicit symptom terms."""
+"""Select a workflow from symptom terms or an exact message lookup."""
 
 import re
 from unicodedata import normalize
@@ -20,12 +20,18 @@ _SYMPTOMS: dict[DiagnosisWorkflow, re.Pattern[str]] = {
 }
 
 
-def select_diagnosis_route(question: str) -> DiagnosisRoute:
+def select_diagnosis_route(question: str, *, message_lookup: bool = False) -> DiagnosisRoute:
     description = normalize("NFKC", question)
     matches = {
         workflow: list(dict.fromkeys(match.group().casefold() for match in pattern.finditer(description)))
         for workflow, pattern in _SYMPTOMS.items()
     }
+    if message_lookup:
+        if matches["http_health"]:
+            raise ValueError("HTTP health symptoms conflict with --message-id. Focus on the message lookup.")
+        return {
+            "workflow": "queue", "matched_terms": matches["queue"], "selected_by": "message_id",
+        }
     routes = [workflow for workflow, terms in matches.items() if terms]
     if not routes:
         raise ValueError("Describe a queue symptom or an HTTP health symptom, or choose an explicit command.")

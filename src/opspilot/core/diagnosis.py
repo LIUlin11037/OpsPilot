@@ -209,9 +209,13 @@ class NextCheck(TypedDict):
 DiagnosisWorkflow = Literal["http_health", "queue"]
 
 
-class DiagnosisRoute(TypedDict):
+class DiagnosisRouteFields(TypedDict):
     workflow: DiagnosisWorkflow
     matched_terms: list[str]
+
+
+class DiagnosisRoute(DiagnosisRouteFields, total=False):
+    selected_by: Literal["message_id"]
 
 
 class DiagnosisReport(DiagnosisReportFields, total=False):

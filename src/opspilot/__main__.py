@@ -239,6 +239,11 @@ def _run_auto_diagnosis(args: argparse.Namespace, parser: argparse.ArgumentParse
     question = args.question.strip()
     if not question:
         raise ValueError("question must not be empty")
+    if args.message_id is not None:
+        if not args.message_id.strip():
+            raise ValueError("--message-id must not be empty")
+        if args.config is None:
+            raise ValueError("--message-id requires --config with a RabbitMQ processing source")
     direct_options = (args.health_config, args.management_url, args.queue, args.vhost, args.timeout)
     if args.config is not None and any(value is not None for value in direct_options):
         raise ValueError("--config cannot be combined with direct target options")
@@ -247,7 +252,7 @@ def _run_auto_diagnosis(args: argparse.Namespace, parser: argparse.ArgumentParse
     if args.management_url is None and (args.vhost is not None or args.timeout is not None):
         raise ValueError("--vhost and --timeout require --management-url")
 
-    routing = select_diagnosis_route(question)
+    routing = select_diagnosis_route(question, message_lookup=args.message_id is not None)
     target = load_target_config(args.config) if args.config is not None else None
     if routing["workflow"] == "http_health":
         config = target.health if target is not None else None
@@ -261,11 +266,15 @@ def _run_auto_diagnosis(args: argparse.Namespace, parser: argparse.ArgumentParse
     else:
         rabbitmq = target.rabbitmq if target is not None else None
         if rabbitmq is not None:
+            has_processing_source = rabbitmq.processing_url is not None or rabbitmq.processing_record is not None
+            if args.message_id is not None and not has_processing_source:
+                raise ValueError("--message-id requires rabbitmq.processing_url or rabbitmq.processing_record")
             report = _run_configured_queue(
                 question, _connect_rabbitmq(rabbitmq, parser),
                 consumer_health_url=rabbitmq.consumer_health_url,
                 processing_url=rabbitmq.processing_url,
                 processing_record=rabbitmq.processing_record,
+                message_id=args.message_id,
             )
         elif args.management_url is not None:
             report = run_queue_diagnosis(question, _rabbitmq_connector(args, parser))
@@ -363,6 +372,7 @@ def main() -> None:
     auto_diagnose.add_argument("--health-config", type=Path, help="JSON file with health endpoints.")
     auto_diagnose.add_argument("--management-url", help="RabbitMQ Management API base URL.")
     _add_queue_options(auto_diagnose)
+    auto_diagnose.add_argument("--message-id", help="Look up an exact message using the configured processing source.")
     auto_diagnose.add_argument("question", help="Incident description.")
     hirehub = commands.add_parser(
         "diagnose-hirehub", help="Diagnose a HireHub delivery with live reads or a snapshot."

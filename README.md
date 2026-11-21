@@ -39,6 +39,12 @@ python -m venv .venv
 
 可在 `rabbitmq` 段添加 `consumer_health_url`，并通过 `processing_url` 或 `processing_record` 配置一个处理记录来源。观察到待投递或待确认消息时，队列流程会检查已配置的消费者端点，并按队列和虚拟主机读取最新处理记录。`processing_record` 的相对路径以目标配置文件所在目录为基准。
 
+配置了处理记录来源后，可以通过 `--message-id` 指定一条消息。OpsPilot 会选择队列流程，按队列、虚拟主机和消息 ID 精确查询。即使队列为空或指标不可用，也会尝试读取该消息的处理记录。报告会记录所请求的 ID 及选择依据。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot diagnose-auto --config .\target.json --message-id "msg-101" "这条消息处理了吗？"
+```
+
 临时排查也可以直接提供连接选项。
 
 ```powershell

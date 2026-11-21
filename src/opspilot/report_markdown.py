@@ -132,10 +132,11 @@ def render_markdown(report: StoredReport) -> str:
     correlation = report.get("processing_correlation")
     routing = report.get("routing")
     if routing is not None:
-        lines.extend([
-            f"- **Selected workflow** {_value(routing['workflow'])}",
-            f"- **Matched terms** {_value(routing['matched_terms'])}",
-        ])
+        lines.append(f"- **Selected workflow** {_value(routing['workflow'])}")
+        if routing.get("selected_by") == "message_id":
+            lines.append("- **Selection basis** Requested message ID")
+        if routing["matched_terms"]:
+            lines.append(f"- **Matched terms** {_value(routing['matched_terms'])}")
     if correlation is not None:
         lines.append(f"- **Message correlation** {_value(correlation)}")
     if "requested_message_id" in report:
