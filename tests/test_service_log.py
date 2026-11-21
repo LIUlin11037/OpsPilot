@@ -67,6 +67,7 @@ def test_service_log_preserves_an_unavailable_result_for_an_oversized_export() -
         (204, "{invalid", None, None, True, False, False),
         (403, "{invalid", None, None, False, False, False),
         (204, "", 0, None, True, True, False),
+        (204, "", 0, None, True, True, True),
         (204, "entry", 1, None, False, True, False),
         (204, "entry", 1, None, True, True, False),
         (204, None, None, "log_not_found", True, True, False),
@@ -106,7 +107,8 @@ def test_http_cli_uses_the_configured_log_on_failure_or_explicit_recheck(
                 assert preview.returncode == 0, preview.stderr
                 planned_checks = json.loads(preview.stdout)["checks"]
                 assert planned_checks[1]["when"] == "always"
-                assert planned_checks[2]["when"] == "service_unhealthy_or_unknown_or_log_errors"
+                expected_condition = "always" if dependency_flag else "service_unhealthy_or_unknown_or_log_errors"
+                assert planned_checks[2]["when"] == expected_condition
                 assert requests == []
             result = _cli(directory, command, "--config", str(config), *options, "Check HTTP health")
 

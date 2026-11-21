@@ -82,6 +82,33 @@ def test_auto_diagnosis_runs_and_saves_the_selected_workflow(
         assert f"**Matched terms** {', '.join(terms)}" in markdown.stdout
 
 
+def test_auto_diagnosis_checks_dependencies_of_a_healthy_service(processing_service) -> None:
+    with TemporaryDirectory(prefix="opspilot-auto-recheck-") as directory:
+        config = Path(directory) / "health.json"
+        with processing_service(lambda path: (204 if path == "/health" else 503, b"")) as (endpoint, requests):
+            base = endpoint.removesuffix("/processing")
+            config.write_text(json.dumps({
+                "service_url": f"{base}/health", "dependency_urls": [f"{base}/dependency"],
+            }), encoding="utf-8")
+            options = ("diagnose-auto", "--health-config", str(config), "--check-dependencies", "Check HTTP health")
+            preview = _cli(directory, *options, "--plan")
+            assert preview.returncode == 0, preview.stderr
+            checks = json.loads(preview.stdout)["checks"]
+            assert checks == [
+                {"tool": "inspect_service_health", "when": "always", "count": 1},
+                {"tool": "inspect_dependency_health", "when": "always", "count": 1},
+            ]
+            assert requests == []
+            result = _cli(directory, *options)
+
+        assert result.returncode == 0, result.stderr
+        assert requests == ["/health", "/dependency"]
+        report = json.loads(result.stdout)
+        assert report["status"] == "undetermined"
+        assert report["planned_checks"] == checks
+        assert [item["http_status"] for item in report["evidence"]] == [204, 503]
+
+
 @pytest.mark.parametrize(
     ("options", "question", "error"),
     [
@@ -104,6 +131,10 @@ def test_auto_diagnosis_runs_and_saves_the_selected_workflow(
          "Check delivery", "--message-id requires --workflow queue"),
         (["--config", "unused.json", "--delivery-id", "1001", "--workflow", "queue"],
          "Trace delivery", "cannot be combined with --workflow"),
+        (["--check-dependencies", "--workflow", "queue"],
+         "Check backlog", "--check-dependencies requires the HTTP health workflow"),
+        (["--check-dependencies", "--config", "unused.json", "--delivery-id", "1001"],
+         "Trace delivery", "--check-dependencies requires the HTTP health workflow"),
     ],
 )
 def test_auto_diagnosis_requires_clear_and_configured_symptoms(options, question, error) -> None:

@@ -47,7 +47,6 @@ from opspilot.task_store import StoredReport, list_reports, load_report, save_re
 
 
 _LOG_CONFIG_REQUIRED = "--check-service-log requires service_log_path in the health configuration"
-_LOG_WORKFLOW_REQUIRED = "--check-service-log requires the HTTP health workflow"
 
 
 def _add_queue_options(
@@ -285,9 +284,15 @@ def _prepare_auto_diagnosis(
     if args.management_url is None and (args.vhost is not None or args.timeout is not None):
         raise ValueError("--vhost and --timeout require --management-url")
 
+    health_option = None
+    if args.check_service_log:
+        health_option = "--check-service-log"
+    elif args.check_dependencies:
+        health_option = "--check-dependencies"
+
     if args.delivery_id is not None:
-        if args.check_service_log:
-            raise ValueError(_LOG_WORKFLOW_REQUIRED)
+        if health_option is not None:
+            raise ValueError(f"{health_option} requires the HTTP health workflow")
         target = load_target_config(args.config)
         if target.hirehub_snapshot is None:
             raise ValueError("--delivery-id requires hirehub.snapshot in --config")
@@ -306,8 +311,8 @@ def _prepare_auto_diagnosis(
     routing = select_diagnosis_route(
         question, message_lookup=args.message_id is not None, workflow=args.workflow,
     )
-    if args.check_service_log and routing["workflow"] != "http_health":
-        raise ValueError(_LOG_WORKFLOW_REQUIRED)
+    if health_option is not None and routing["workflow"] != "http_health":
+        raise ValueError(f"{health_option} requires the HTTP health workflow")
     target = load_target_config(args.config) if args.config is not None else None
     if routing["workflow"] == "http_health":
         config = target.health if target is not None else None
@@ -330,18 +335,22 @@ def _prepare_auto_diagnosis(
             len(config.dependency_urls) + len(config.redis_dependency_urls) + len(config.mysql_dependency_urls)
         )
         if dependency_count:
-            checks.append({
-                "tool": "inspect_dependency_health",
-                "when": (
-                    "service_unhealthy_or_unknown_or_log_errors" if args.check_service_log
-                    else "service_unhealthy_or_unknown"
-                ),
+            dependency_check: PlannedCheck = {
+                "tool": "inspect_dependency_health", "when": "service_unhealthy_or_unknown",
                 "count": dependency_count,
-            })
+            }
+            if args.check_dependencies:
+                dependency_check["when"] = "always"
+            elif args.check_service_log:
+                dependency_check["when"] = "service_unhealthy_or_unknown_or_log_errors"
+            checks.append(dependency_check)
         plan = {
             "question": question, "routing": routing, "scope": {}, "checks": checks,
         }
-        return plan, partial(_run_configured_health, question, config, check_service_log=args.check_service_log)
+        return plan, partial(
+            _run_configured_health, question, config,
+            check_dependencies=args.check_dependencies, check_service_log=args.check_service_log,
+        )
 
     rabbitmq = target.rabbitmq if target is not None else None
     if args.management_url is not None:
@@ -451,10 +460,6 @@ def main() -> None:
         "--mysql-dependency-url", action="append", default=[], help="MySQL dependency URL. Repeatable."
     )
     health.add_argument(
-        "--check-dependencies", action="store_true",
-        help="Check configured dependencies even when the service is healthy.",
-    )
-    health.add_argument(
         "--timeout", type=float, metavar="SECONDS", help="Socket timeout (default: 5)."
     )
     health.add_argument("question", help="Incident description.")
@@ -474,6 +479,10 @@ def main() -> None:
     auto_scope.add_argument("--delivery-id", type=int, help="Trace a delivery in the configured HireHub snapshot.")
     auto_diagnose.add_argument("question", help="Incident description.")
     for health_parser in (health, auto_diagnose):
+        health_parser.add_argument(
+            "--check-dependencies", action="store_true",
+            help="Check configured dependencies even when the service is healthy.",
+        )
         health_parser.add_argument(
             "--check-service-log", action="store_true",
             help="Check the configured service log regardless of HTTP health.",
