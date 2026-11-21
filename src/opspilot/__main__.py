@@ -95,21 +95,35 @@ def _connect_rabbitmq(
     )
 
 
-def _target_processing_tool(
-    args: argparse.Namespace, connector: RabbitMQQueueConnector
-) -> TargetProcessingTool | None:
-    if args.processing_record is not None:
-        return JsonProcessingAdapter(
-            args.processing_record, queue=connector.queue, vhost=connector.vhost
+def _run_configured_queue(
+    question: str,
+    connector: RabbitMQQueueConnector,
+    *,
+    consumer_health_url: str | None = None,
+    processing_url: str | None = None,
+    processing_record: Path | None = None,
+    message_id: str | None = None,
+) -> DiagnosisReport:
+    processing_tool: TargetProcessingTool | None = None
+    if processing_record is not None:
+        processing_tool = JsonProcessingAdapter(
+            processing_record, queue=connector.queue, vhost=connector.vhost,
         )
-    if args.processing_url is not None:
-        return HttpProcessingAdapter(
-            args.processing_url,
+    elif processing_url is not None:
+        processing_tool = HttpProcessingAdapter(
+            processing_url,
             queue=connector.queue,
             vhost=connector.vhost,
             timeout_seconds=connector.timeout_seconds,
         )
-    return None
+    consumer_health_tool = (
+        HttpHealthConnector(consumer_health_url, connector.timeout_seconds)
+        if consumer_health_url is not None else None
+    )
+    return run_queue_diagnosis(
+        question, connector, processing_tool, message_id=message_id,
+        consumer_health_tool=consumer_health_tool,
+    )
 
 
 def _mysql_credentials() -> tuple[str, str]:
@@ -245,15 +259,20 @@ def _run_auto_diagnosis(args: argparse.Namespace, parser: argparse.ArgumentParse
             )
         report = _run_configured_health(question, config)
     else:
-        if target is not None and target.rabbitmq is not None:
-            connector = _connect_rabbitmq(target.rabbitmq, parser)
+        rabbitmq = target.rabbitmq if target is not None else None
+        if rabbitmq is not None:
+            report = _run_configured_queue(
+                question, _connect_rabbitmq(rabbitmq, parser),
+                consumer_health_url=rabbitmq.consumer_health_url,
+                processing_url=rabbitmq.processing_url,
+                processing_record=rabbitmq.processing_record,
+            )
         elif args.management_url is not None:
-            connector = _rabbitmq_connector(args, parser)
+            report = run_queue_diagnosis(question, _rabbitmq_connector(args, parser))
         else:
             raise ValueError(
                 "Queue symptoms matched. Supply --management-url and --queue or a rabbitmq section in --config."
             )
-        report = run_queue_diagnosis(question, connector)
 
     report["routing"] = routing
     return report
@@ -535,14 +554,11 @@ def main() -> None:
             if args.management_url is not None:
                 queue_tool = _rabbitmq_connector(args, diagnose)
                 try:
-                    processing_tool = _target_processing_tool(args, queue_tool)
-                    consumer_health_tool = (
-                        HttpHealthConnector(args.consumer_health_url, queue_tool.timeout_seconds)
-                        if args.consumer_health_url is not None else None
-                    )
-                    report = run_queue_diagnosis(
-                        question, queue_tool, processing_tool, message_id=args.message_id,
-                        consumer_health_tool=consumer_health_tool,
+                    report = _run_configured_queue(
+                        question, queue_tool, message_id=args.message_id,
+                        consumer_health_url=args.consumer_health_url,
+                        processing_url=args.processing_url,
+                        processing_record=args.processing_record,
                     )
                 except ValueError as error:
                     diagnose.error(str(error))

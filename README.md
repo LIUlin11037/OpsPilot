@@ -37,6 +37,8 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m opspilot diagnose-auto --config .\target.json "RabbitMQ 队列积压"
 ```
 
+可在 `rabbitmq` 段添加 `consumer_health_url`，并通过 `processing_url` 或 `processing_record` 配置一个处理记录来源。观察到待投递或待确认消息时，队列流程会检查已配置的消费者端点，并按队列和虚拟主机读取最新处理记录。`processing_record` 的相对路径以目标配置文件所在目录为基准。
+
 临时排查也可以直接提供连接选项。
 
 ```powershell

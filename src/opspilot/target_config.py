@@ -13,6 +13,9 @@ class RabbitMQTargetConfig:
     queue: str
     vhost: str = "/"
     timeout_seconds: float = 5.0
+    consumer_health_url: str | None = None
+    processing_url: str | None = None
+    processing_record: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -28,14 +31,31 @@ def _rabbitmq_string(data: dict[str, object], field: str, default: str = "") -> 
     return value
 
 
-def _parse_rabbitmq(data: dict[str, object]) -> RabbitMQTargetConfig:
-    if data.keys() - {"management_url", "queue", "vhost", "timeout_seconds"}:
+def _parse_rabbitmq(data: dict[str, object], config_dir: Path) -> RabbitMQTargetConfig:
+    fields = {
+        "management_url", "queue", "vhost", "timeout_seconds",
+        "consumer_health_url", "processing_url", "processing_record",
+    }
+    if data.keys() - fields:
         raise ValueError("RabbitMQ configuration contains unsupported fields.")
+    if "processing_url" in data and "processing_record" in data:
+        raise ValueError("rabbitmq.processing_url and rabbitmq.processing_record are mutually exclusive.")
+    consumer_health_url = (
+        _rabbitmq_string(data, "consumer_health_url") if "consumer_health_url" in data else None
+    )
+    processing_url = _rabbitmq_string(data, "processing_url") if "processing_url" in data else None
+    processing_record = (
+        config_dir / _rabbitmq_string(data, "processing_record")
+        if "processing_record" in data else None
+    )
     return RabbitMQTargetConfig(
         management_url=_rabbitmq_string(data, "management_url"),
         queue=_rabbitmq_string(data, "queue"),
         vhost=_rabbitmq_string(data, "vhost", "/"),
         timeout_seconds=parse_timeout_seconds(data.get("timeout_seconds", 5.0)),
+        consumer_health_url=consumer_health_url,
+        processing_url=processing_url,
+        processing_record=processing_record,
     )
 
 
@@ -53,5 +73,5 @@ def load_target_config(path: Path) -> TargetConfig:
         raise ValueError("rabbitmq must be a JSON object.")
     return TargetConfig(
         health=parse_health_config(health) if isinstance(health, dict) else None,
-        rabbitmq=_parse_rabbitmq(rabbitmq) if isinstance(rabbitmq, dict) else None,
+        rabbitmq=_parse_rabbitmq(rabbitmq, path.absolute().parent) if isinstance(rabbitmq, dict) else None,
     )

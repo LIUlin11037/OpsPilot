@@ -3,6 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -114,6 +115,75 @@ def test_auto_diagnosis_requires_the_selected_section_in_target_file() -> None:
 
 
 @pytest.mark.parametrize(
+    ("pending", "unacknowledged", "processing_source"),
+    [(3, 0, "processing_url"), (None, 2, "processing_record"), (0, 0, "processing_url")],
+)
+def test_target_queue_uses_configured_checks_only_when_queue_activity_is_observed(
+    processing_service, monkeypatch, pending, unacknowledged, processing_source,
+) -> None:
+    metrics = json.dumps({
+        "messages_ready": pending, "messages_unacknowledged": unacknowledged, "consumers": 1,
+    }).encode()
+    record = json.dumps({
+        "queue": "orders", "vhost": "staging", "message_id": "msg-101",
+        "result": "succeeded", "attempted_at": "2026-11-19T03:00:00Z",
+    })
+    queue_path = "/api/queues/staging/orders"
+
+    def respond(path):
+        if path == queue_path:
+            return 200, metrics
+        if path == "/consumer-health":
+            return 503, b""
+        return 200, record.encode()
+
+    monkeypatch.setenv("OPSPILOT_RABBITMQ_USER", "test-reader")
+    monkeypatch.setenv("OPSPILOT_RABBITMQ_PASSWORD", "test-password")
+    with TemporaryDirectory(prefix="opspilot-target-config-") as directory:
+        config_dir = Path(directory) / "configs"
+        config_dir.mkdir()
+        config = config_dir / "target.json"
+        record_path = config_dir / "processing record.json"
+        record_path.write_text(record, encoding="utf-8")
+        with processing_service(respond) as (endpoint, requests):
+            base = endpoint.removesuffix("/processing")
+            processing_value = endpoint if processing_source == "processing_url" else record_path.name
+            config.write_text(json.dumps({
+                "rabbitmq": {
+                    "management_url": base, "queue": "orders", "vhost": "staging",
+                    "consumer_health_url": f"{base}/consumer-health",
+                    processing_source: processing_value,
+                },
+            }), encoding="utf-8")
+            result = _cli(directory, "diagnose-auto", "--config", str(config), "队列积压")
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["routing"]["workflow"] == "queue"
+    if pending == 0 and unacknowledged == 0:
+        assert requests == [queue_path]
+        assert [call["tool"] for call in report["tool_calls"]] == ["inspect_queue"]
+        return
+
+    queue, health, processing = report["evidence"]
+    assert queue["unacknowledged_messages"] == unacknowledged
+    assert health["tool"] == "inspect_consumer_endpoint" and health["http_status"] == 503
+    assert processing["tool"] == "inspect_processing" and processing["message_id"] == "msg-101"
+    assert [call["tool"] for call in report["tool_calls"]] == [
+        "inspect_queue", "inspect_consumer_endpoint", "inspect_processing",
+    ]
+    if processing_source == "processing_url":
+        queue_request, health_request, processing_request = requests
+        assert (queue_request, health_request) == (queue_path, "/consumer-health")
+        url = urlsplit(processing_request)
+        assert url.path == "/processing"
+        assert parse_qs(url.query) == {"queue": ["orders"], "vhost": ["staging"]}
+    else:
+        assert requests == [queue_path, "/consumer-health"]
+        assert processing["source"] == record_path.as_uri()
+
+
+@pytest.mark.parametrize(
     ("data", "error"),
     [
         ({}, "requires a health or rabbitmq section"),
@@ -123,6 +193,10 @@ def test_auto_diagnosis_requires_the_selected_section_in_target_file() -> None:
          "unsupported fields"),
         ({"rabbitmq": {"management_url": "http://localhost", "queue": "orders", "timeout_seconds": True}},
          "timeout_seconds must be a finite positive number"),
+        ({"rabbitmq": {
+            "management_url": "http://localhost", "queue": "orders",
+            "processing_url": "http://localhost/processing", "processing_record": "processing.json",
+        }}, "processing_url and rabbitmq.processing_record are mutually exclusive"),
     ],
 )
 def test_target_config_rejects_invalid_fields(data, error) -> None:
