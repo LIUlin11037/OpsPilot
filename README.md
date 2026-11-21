@@ -67,6 +67,12 @@ python -m venv .venv
 
 描述同时命中两类症状、没有命中或缺少所选流程的配置时，命令会提示补充。可以聚焦一种症状后重试，也可以用 `diagnose-http` 或 `diagnose` 明确指定流程。自动选择只识别固定症状词，选中的流程仍按观测证据决定后续检查。
 
+使用 `--plan` 可预览选中的流程、查询范围和检查条件。预览根据本地配置生成 JSON，连接可用性和数据来源在执行诊断时验证。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot diagnose-auto --config .\target.json --plan "RabbitMQ 队列积压"
+```
+
 ## HTTP 健康诊断
 
 将服务和可选依赖的健康检查 URL 提供给 `diagnose-http`。默认在服务端点异常或健康状态未知时检查已配置的依赖。

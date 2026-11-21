@@ -126,6 +126,66 @@ def test_auto_diagnosis_requires_the_selected_section_in_target_file() -> None:
 
 
 @pytest.mark.parametrize(
+    ("options", "question", "workflow", "scope", "checks"),
+    [
+        ([], "服务返回 503", "http_health", {}, [
+            ("inspect_service_health", "always", 1),
+            ("inspect_dependency_health", "service_unhealthy_or_unknown", 2),
+        ]),
+        ([], "队列积压", "queue", {"queue": "orders", "vhost": "staging"}, [
+            ("inspect_queue", "always", 1),
+            ("inspect_consumer_endpoint", "queue_activity", 1),
+            ("inspect_processing", "queue_activity", 1),
+        ]),
+        (["--message-id", "msg-101"], "这条消息处理了吗？", "queue",
+         {"queue": "orders", "vhost": "staging", "message_id": "msg-101"}, [
+             ("inspect_queue", "always", 1),
+             ("inspect_consumer_endpoint", "queue_activity", 1),
+             ("inspect_processing", "always", 1),
+         ]),
+        (["--delivery-id", "1001"], "投递通知没收到", "target_trace", {"delivery_id": 1001}, [
+            ("inspect_target_trace", "always", 1),
+        ]),
+    ],
+)
+def test_auto_plan_previews_checks_without_running_or_saving_a_diagnosis(
+    processing_service, monkeypatch, options, question, workflow, scope, checks,
+) -> None:
+    for name in ("OPSPILOT_RABBITMQ", "OPSPILOT_MYSQL"):
+        monkeypatch.delenv(f"{name}_USER", raising=False)
+        monkeypatch.delenv(f"{name}_PASSWORD", raising=False)
+
+    with TemporaryDirectory(prefix="opspilot-auto-plan-") as directory:
+        config = Path(directory) / "target.json"
+        database = Path(directory) / "reports.sqlite3"
+        with processing_service(lambda path: (503, b"")) as (endpoint, requests):
+            base = endpoint.removesuffix("/processing")
+            config.write_text(json.dumps({
+                "health": {
+                    "service_url": f"{base}/health", "dependency_urls": [f"{base}/dependency"],
+                    "mysql_dependency_urls": ["mysql://localhost:3306"],
+                },
+                "rabbitmq": {
+                    "management_url": base, "queue": "orders", "vhost": "staging",
+                    "consumer_health_url": f"{base}/consumer-health", "processing_url": endpoint,
+                },
+                "hirehub": {"snapshot": "unavailable.json"},
+            }), encoding="utf-8")
+            result = _cli(directory, "--db", str(database), "diagnose-auto", "--config", str(config),
+                          "--plan", *options, question)
+
+        assert result.returncode == 0, result.stderr
+        plan = json.loads(result.stdout)
+        assert plan["question"] == question and plan["routing"]["workflow"] == workflow
+        if options:
+            assert plan["routing"]["selected_by"] == options[0].removeprefix("--").replace("-", "_")
+        assert plan["scope"] == scope
+        assert [(item["tool"], item["when"], item["count"]) for item in plan["checks"]] == checks
+        assert requests == []
+        assert not database.exists()
+
+
+@pytest.mark.parametrize(
     ("pending", "unacknowledged", "processing_source"),
     [(3, 0, "processing_url"), (None, 2, "processing_record"), (0, 0, "processing_url")],
 )

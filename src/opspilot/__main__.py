@@ -5,9 +5,11 @@ import json
 import os
 import sqlite3
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
+from typing import Literal, TypedDict
 
 from opspilot.adapters.hirehub_capture import HireHubLiveAdapter
 from opspilot.adapters.hirehub_snapshot import NOTIFICATION_QUEUE, HireHubSnapshotAdapter
@@ -24,6 +26,7 @@ from opspilot.core.diagnosis import (
     DiagnosisRoute,
     HealthTool,
     TargetProcessingTool,
+    ToolName,
     run_diagnosis,
     run_queue_diagnosis,
 )
@@ -66,16 +69,19 @@ def _add_hirehub_live_options(parser: argparse.ArgumentParser, *, required: bool
 def _rabbitmq_connector(
     args: argparse.Namespace, parser: argparse.ArgumentParser
 ) -> RabbitMQQueueConnector:
+    return _connect_rabbitmq(_rabbitmq_config(args, parser), parser)
+
+
+def _rabbitmq_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> RabbitMQTargetConfig:
     if args.queue is None:
         parser.error("--queue is required with --management-url")
 
-    config = RabbitMQTargetConfig(
+    return RabbitMQTargetConfig(
         management_url=args.management_url,
         queue=args.queue,
         vhost="/" if args.vhost is None else args.vhost,
         timeout_seconds=5.0 if args.timeout is None else args.timeout,
     )
-    return _connect_rabbitmq(config, parser)
 
 
 def _connect_rabbitmq(
@@ -236,7 +242,22 @@ def _run_configured_health(
     )
 
 
-def _run_auto_diagnosis(args: argparse.Namespace, parser: argparse.ArgumentParser) -> DiagnosisReport:
+class _PlanCheck(TypedDict):
+    tool: ToolName
+    when: Literal["always", "service_unhealthy_or_unknown", "queue_activity"]
+    count: int
+
+
+class _AutoDiagnosisPlan(TypedDict):
+    question: str
+    routing: DiagnosisRoute
+    scope: dict[str, str | int]
+    checks: list[_PlanCheck]
+
+
+def _prepare_auto_diagnosis(
+    args: argparse.Namespace, parser: argparse.ArgumentParser,
+) -> tuple[_AutoDiagnosisPlan, Callable[[], DiagnosisReport]]:
     question = args.question.strip()
     if not question:
         raise ValueError("question must not be empty")
@@ -265,9 +286,14 @@ def _run_auto_diagnosis(args: argparse.Namespace, parser: argparse.ArgumentParse
         routing: DiagnosisRoute = {
             "workflow": "target_trace", "matched_terms": [], "selected_by": "delivery_id",
         }
-        report = run_target_trace(question, args.delivery_id, HireHubSnapshotAdapter(target.hirehub_snapshot))
-        report["routing"] = routing
-        return report
+        plan: _AutoDiagnosisPlan = {
+            "question": question, "routing": routing,
+            "scope": {"delivery_id": args.delivery_id},
+            "checks": [{"tool": "inspect_target_trace", "when": "always", "count": 1}],
+        }
+        return plan, partial(
+            run_target_trace, question, args.delivery_id, HireHubSnapshotAdapter(target.hirehub_snapshot),
+        )
 
     routing = select_diagnosis_route(question, message_lookup=args.message_id is not None)
     target = load_target_config(args.config) if args.config is not None else None
@@ -279,29 +305,55 @@ def _run_auto_diagnosis(args: argparse.Namespace, parser: argparse.ArgumentParse
             raise ValueError(
                 "HTTP health symptoms matched. Supply --health-config or a health section in --config."
             )
-        report = _run_configured_health(question, config)
-    else:
-        rabbitmq = target.rabbitmq if target is not None else None
-        if rabbitmq is not None:
-            has_processing_source = rabbitmq.processing_url is not None or rabbitmq.processing_record is not None
-            if args.message_id is not None and not has_processing_source:
-                raise ValueError("--message-id requires rabbitmq.processing_url or rabbitmq.processing_record")
-            report = _run_configured_queue(
-                question, _connect_rabbitmq(rabbitmq, parser),
-                consumer_health_url=rabbitmq.consumer_health_url,
-                processing_url=rabbitmq.processing_url,
-                processing_record=rabbitmq.processing_record,
-                message_id=args.message_id,
-            )
-        elif args.management_url is not None:
-            report = run_queue_diagnosis(question, _rabbitmq_connector(args, parser))
-        else:
-            raise ValueError(
-                "Queue symptoms matched. Supply --management-url and --queue or a rabbitmq section in --config."
-            )
+        checks: list[_PlanCheck] = [{"tool": "inspect_service_health", "when": "always", "count": 1}]
+        dependency_count = (
+            len(config.dependency_urls) + len(config.redis_dependency_urls) + len(config.mysql_dependency_urls)
+        )
+        if dependency_count:
+            checks.append({
+                "tool": "inspect_dependency_health", "when": "service_unhealthy_or_unknown",
+                "count": dependency_count,
+            })
+        plan = {
+            "question": question, "routing": routing, "scope": {}, "checks": checks,
+        }
+        return plan, partial(_run_configured_health, question, config)
 
-    report["routing"] = routing
-    return report
+    rabbitmq = target.rabbitmq if target is not None else None
+    if args.management_url is not None:
+        rabbitmq = _rabbitmq_config(args, parser)
+    if rabbitmq is None:
+        raise ValueError(
+            "Queue symptoms matched. Supply --management-url and --queue or a rabbitmq section in --config."
+        )
+
+    has_processing_source = rabbitmq.processing_url is not None or rabbitmq.processing_record is not None
+    message_id = args.message_id
+    if message_id is not None and not has_processing_source:
+        raise ValueError("--message-id requires rabbitmq.processing_url or rabbitmq.processing_record")
+
+    scope: dict[str, str | int] = {"queue": rabbitmq.queue, "vhost": rabbitmq.vhost}
+    if message_id is not None:
+        scope["message_id"] = message_id
+    checks = [{"tool": "inspect_queue", "when": "always", "count": 1}]
+    if rabbitmq.consumer_health_url is not None:
+        checks.append({"tool": "inspect_consumer_endpoint", "when": "queue_activity", "count": 1})
+    if has_processing_source:
+        checks.append({
+            "tool": "inspect_processing", "when": "always" if message_id is not None else "queue_activity",
+            "count": 1,
+        })
+
+    def diagnose_queue() -> DiagnosisReport:
+        return _run_configured_queue(
+            question, _connect_rabbitmq(rabbitmq, parser),
+            consumer_health_url=rabbitmq.consumer_health_url,
+            processing_url=rabbitmq.processing_url,
+            processing_record=rabbitmq.processing_record,
+            message_id=message_id,
+        )
+
+    return {"question": question, "routing": routing, "scope": scope, "checks": checks}, diagnose_queue
 
 
 def main() -> None:
@@ -388,6 +440,7 @@ def main() -> None:
     auto_diagnose.add_argument("--config", type=Path, help="JSON file with workflows for a target.")
     auto_diagnose.add_argument("--health-config", type=Path, help="JSON file with health endpoints.")
     auto_diagnose.add_argument("--management-url", help="RabbitMQ Management API base URL.")
+    auto_diagnose.add_argument("--plan", action="store_true", help="Show the selected workflow and its configured checks.")
     _add_queue_options(auto_diagnose)
     auto_scope = auto_diagnose.add_mutually_exclusive_group()
     auto_scope.add_argument("--message-id", help="Look up an exact message in the configured processing source.")
@@ -549,7 +602,12 @@ def main() -> None:
                 health.error(str(error))
         elif args.command == "diagnose-auto":
             try:
-                report = _run_auto_diagnosis(args, auto_diagnose)
+                plan, run_diagnostic = _prepare_auto_diagnosis(args, auto_diagnose)
+                if args.plan:
+                    print(json.dumps(plan, indent=2))
+                    return
+                report = run_diagnostic()
+                report["routing"] = plan["routing"]
             except ValueError as error:
                 auto_diagnose.error(str(error))
         elif args.command == "diagnose-hirehub":
