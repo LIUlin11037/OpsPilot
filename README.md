@@ -87,7 +87,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe examples/auto_diagnosis_demo.py
 ```
 
-每次运行都会在 `.opspilot/demo/` 下创建一个独立目录，保存一个含 4 份报告的 SQLite 数据库和两份 Markdown 对比。打开 `health-comparison.md` 可以看到服务从 503 恢复到 204，日志错误从 1 条降到 0 条。演示在故障和恢复阶段分别生成一份日志快照，恢复时主动复查日志，无需等待故障日志退出五分钟统计窗口。
+每次运行都会在 `.opspilot/demo/` 下创建一个独立目录，保存一个含 4 份报告的 SQLite 数据库和两份 Markdown 对比。打开 `health-comparison.md` 可以看到主服务和依赖都从 503 恢复到 204，日志错误从 1 条降到 0 条，整体诊断从 `undetermined` 变为 `no_failure_observed`。演示在故障和恢复阶段分别生成一份日志快照，恢复时主动复查依赖和日志，无需等待故障日志退出五分钟统计窗口。
 
 打开 `queue-comparison.md` 可以看到待投递消息从 3 降到 0，以及清空后缺少消费者端点观测。若需回看单份报告，将演示输出的数据库路径传给 `opspilot --db PATH reports`。
 
@@ -169,6 +169,8 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m opspilot reports --service-url http://127.0.0.1:8080/health --limit 2
 .\.venv\Scripts\python.exe -m opspilot compare-http "BEFORE_TASK_ID" "AFTER_TASK_ID" --format markdown
 ```
+
+Markdown 和 JSON 都显示两次报告保存的整体诊断状态。JSON 使用 `before_status` 和 `after_status` 两个字段。即使主服务恢复到 204，只要依赖检查仍有异常，复查状态就会保留 `undetermined`。
 
 Markdown 表格并排显示基准和复查观测，包括健康状态、HTTP 状态码、失败原因以及已记录的 MySQL 错误码。默认输出 JSON，`changes` 列出变化的端点观测。任一侧缺少观测时，Markdown 显示 `No observation recorded`，JSON 以 `null` 表示。相同角色和 URL 的重复检查按 `occurrence` 从 1 开始匹配。
 

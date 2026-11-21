@@ -2,7 +2,7 @@
 
 from typing import Literal, TypedDict
 
-from opspilot.core.diagnosis import Evidence, ObservationOutcome, TargetTraceSummary
+from opspilot.core.diagnosis import DiagnosisStatus, Evidence, ObservationOutcome, TargetTraceSummary
 from opspilot.task_store import StoredReport
 
 ComparisonValue = str | int | None
@@ -86,6 +86,8 @@ class ServiceLogChange(TypedDict):
 class HealthComparisonFields(TypedDict):
     before_task_id: str
     after_task_id: str
+    before_status: DiagnosisStatus
+    after_status: DiagnosisStatus
     service_url: str
     changes: list[EndpointChange]
 
@@ -290,6 +292,8 @@ def compare_health_reports(
     comparison: HealthComparison = {
         "before_task_id": before["task_id"],
         "after_task_id": after["task_id"],
+        "before_status": before["status"],
+        "after_status": after["status"],
         "service_url": service,
         "changes": _endpoint_changes(before_values, after_values),
     }

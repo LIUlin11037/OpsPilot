@@ -99,8 +99,8 @@ def run_demo(directory: Path) -> None:
                 else:
                     entry = {"timestamp": datetime.now(timezone.utc).isoformat(), "level": "ERROR"}
                     service_log.write_text(json.dumps(entry) + "\n", encoding="utf-8")
-                log_options = ("--check-service-log",) if recovered else ()
-                run_cli("diagnose-auto", "--config", str(config), *log_options, "Check HTTP health")
+                recheck_options = ("--check-service-log", "--check-dependencies") if recovered else ()
+                run_cli("diagnose-auto", "--config", str(config), *recheck_options, "Check HTTP health")
                 run_cli("diagnose-auto", "--config", str(config), "Check the queue backlog")
         finally:
             server.shutdown()

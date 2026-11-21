@@ -250,6 +250,7 @@ def test_compare_http_distinguishes_a_skipped_dependency_from_failed_health(save
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
         "before_task_id": before["task_id"], "after_task_id": after["task_id"],
+        "before_status": "undetermined", "after_status": "no_failure_observed",
         "service_url": SERVICE_URL,
         "changes": [
             {
@@ -275,6 +276,8 @@ def test_compare_http_renders_markdown_with_missing_observations(saved_health_pa
     assert result.returncode == 0, result.stderr
     assert f"**Baseline task ID** {before['task_id']}" in result.stdout
     assert f"**Follow-up task ID** {after['task_id']}" in result.stdout
+    assert "**Baseline diagnosis status** undetermined" in result.stdout
+    assert r"**Follow-up diagnosis status** no\_failure\_observed" in result.stdout
     assert (
         f"| Service | {SERVICE_URL} | 1 | Outcome observed, Health unhealthy, HTTP status 503 | "
         "Outcome observed, Health healthy, HTTP status 204 |"
@@ -284,6 +287,22 @@ def test_compare_http_renders_markdown_with_missing_observations(saved_health_pa
         r"Reason request\_timeout | No observation recorded |"
     ) in result.stdout
     assert database.read_bytes() == original
+
+
+def test_compare_http_preserves_undetermined_status_when_a_dependency_still_fails(saved_health_pair) -> None:
+    database, before, healthy = saved_health_pair
+    after = save_report(database, {
+        **before, "evidence": [healthy["evidence"][0], before["evidence"][1]],
+    })
+
+    comparison = compare_health_reports(before, after)
+
+    service, = comparison["changes"]
+    assert service["role"] == "service"
+    assert comparison["before_status"] == comparison["after_status"] == "undetermined"
+    markdown = render_health_comparison_markdown(comparison)
+    assert "HTTP status 204" in markdown
+    assert "**Follow-up diagnosis status** undetermined" in markdown
 
 
 def test_compare_http_detects_a_change_in_mysql_error_code(saved_health_pair) -> None:

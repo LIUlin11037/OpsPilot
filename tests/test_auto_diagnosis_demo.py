@@ -20,7 +20,11 @@ def test_demo_compares_http_health_service_logs_and_queue_backlog() -> None:
         reports = list_reports(run_directory / "reports.sqlite3", limit=5)
 
     assert len(reports) == 4
-    assert "HTTP status 503 | Outcome observed, Health healthy, HTTP status 204 |" in health
+    assert "**Baseline diagnosis status** undetermined" in health
+    assert r"**Follow-up diagnosis status** no\_failure\_observed" in health
+    for role in ("Service", "Dependency"):
+        change, = (line for line in health.splitlines() if line.startswith(f"| {role} |"))
+        assert "HTTP status 503 | Outcome observed, Health healthy, HTTP status 204 |" in change
     assert "## Service log changes" in health
     log_change, = (line for line in health.splitlines() if "| Outcome observed, Error-level entries" in line)
     _, before, after = log_change.split(" | ")

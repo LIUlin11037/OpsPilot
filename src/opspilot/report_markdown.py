@@ -129,6 +129,8 @@ def render_health_comparison_markdown(comparison: HealthComparison) -> str:
         f"- **Service URL** {_value(comparison['service_url'])}",
         f"- **Baseline task ID** {_value(comparison['before_task_id'])}",
         f"- **Follow-up task ID** {_value(comparison['after_task_id'])}",
+        f"- **Baseline diagnosis status** {_value(comparison['before_status'])}",
+        f"- **Follow-up diagnosis status** {_value(comparison['after_status'])}",
         "",
     ]
     lines.extend(_endpoint_change_lines(comparison["changes"]))
