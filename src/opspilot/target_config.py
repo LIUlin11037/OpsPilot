@@ -85,7 +85,7 @@ def load_target_config(path: Path) -> TargetConfig:
         raise ValueError("rabbitmq must be a JSON object.")
     config_dir = path.absolute().parent
     return TargetConfig(
-        health=parse_health_config(health) if isinstance(health, dict) else None,
+        health=parse_health_config(health, config_dir=config_dir) if isinstance(health, dict) else None,
         rabbitmq=_parse_rabbitmq(rabbitmq, config_dir) if isinstance(rabbitmq, dict) else None,
         hirehub_snapshot=_parse_hirehub_snapshot(data["hirehub"], config_dir) if "hirehub" in data else None,
     )

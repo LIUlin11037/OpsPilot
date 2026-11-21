@@ -103,6 +103,10 @@ python -m venv .venv
 
 主服务或依赖端点返回 `5xx` 时，报告会建议查看该端点在观测时间附近的请求日志和错误日志。Markdown 报告会在建议旁标明端点 URL，便于区分多个依赖。
 
+在 HTTP 健康配置中添加 `"service_log_path": "service.jsonl"`，可在主服务返回 `5xx` 时自动统计本地日志。相对路径以配置文件所在目录为基准。`diagnose-auto` 的 `health` 段也支持此字段。
+
+日志输入为 UTF-8 JSON Lines。每行提供带时区的 ISO 8601 `timestamp` 和 `level`，例如 `{"timestamp":"2026-11-21T03:00:00Z","level":"ERROR"}`。OpsPilot 统计健康观测时间前五分钟内的 `ERROR`、`CRITICAL` 和 `FATAL` 条目。报告记录来源、时间窗口和条数。文件缺失、格式无效或超过 1 MiB 时，日志证据记为不可用，后续依赖检查继续。
+
 依赖是 Redis 时，可指定一个允许直接执行 `PING` 的 `redis://HOST[:PORT]` 端点。收到 `PONG` 时记录 Redis 端点可响应。超时、认证拒绝和异常响应记为 `unknown`。 [Redis PING 文档](https://redis.io/docs/latest/commands/ping/)
 
 ```powershell

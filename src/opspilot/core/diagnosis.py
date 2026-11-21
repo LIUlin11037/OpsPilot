@@ -14,6 +14,7 @@ ObservationOutcome = Literal["observed", UnavailableOutcome]
 ToolName = Literal[
     "inspect_queue", "inspect_consumer", "inspect_processing", "inspect_target_trace",
     "inspect_service_health", "inspect_dependency_health", "inspect_consumer_endpoint",
+    "inspect_service_log",
 ]
 ProcessingResult = Literal["succeeded", "failed"]
 ProcessingCorrelation = Literal["matched", "not_in_sample", "unknown"]
@@ -90,6 +91,21 @@ class HealthEvidence(HealthRead):
     tool: Literal["inspect_service_health", "inspect_dependency_health", "inspect_consumer_endpoint"]
 
 
+class ServiceLogReadFields(Observation):
+    outcome: ObservationOutcome
+    window_start: str
+    window_end: str
+
+
+class ServiceLogRead(ServiceLogReadFields, total=False):
+    error_count: int
+    reason: str
+
+
+class ServiceLogEvidence(ServiceLogRead):
+    tool: Literal["inspect_service_log"]
+
+
 class TraceEvidenceFields(Observation):
     tool: Literal["inspect_target_trace"]
     checkpoint: str
@@ -121,7 +137,7 @@ ProcessingRead = ProcessingEvidence | EmptyProcessingEvidence | UnavailableEvide
 
 Evidence = (
     QueueEvidence | ConsumerEvidence | ProcessingRead |
-    TraceEvidence | HealthEvidence
+    TraceEvidence | HealthEvidence | ServiceLogEvidence
 )
 
 
@@ -133,7 +149,7 @@ class ToolCall(TypedDict):
 
 class PlannedCheck(TypedDict):
     tool: ToolName
-    when: Literal["always", "service_unhealthy_or_unknown", "queue_activity"]
+    when: Literal["always", "service_unhealthy", "service_unhealthy_or_unknown", "queue_activity"]
     count: int
 
 

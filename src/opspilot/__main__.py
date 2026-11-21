@@ -17,6 +17,7 @@ from opspilot.adapters.http_processing import HttpProcessingAdapter
 from opspilot.adapters.json_processing import JsonProcessingAdapter
 from opspilot.adapters.simulated import SimulatedProcessingAdapter
 from opspilot.connectors.http_health import HttpHealthConnector
+from opspilot.connectors.jsonl_service_log import JsonlServiceLogConnector
 from opspilot.connectors.mysql import MySQLConnector, MySQLHealthConnector
 from opspilot.connectors.rabbitmq import RabbitMQQueueConnector
 from opspilot.connectors.redis_health import RedisHealthConnector
@@ -239,6 +240,7 @@ def _run_configured_health(
         )
     return run_health_diagnosis(
         question, service, dependencies, check_dependencies=check_dependencies,
+        service_log=JsonlServiceLogConnector(config.service_log_path) if config.service_log_path is not None else None,
     )
 
 
@@ -304,6 +306,8 @@ def _prepare_auto_diagnosis(
                 "HTTP health symptoms matched. Supply --health-config or a health section in --config."
             )
         checks: list[PlannedCheck] = [{"tool": "inspect_service_health", "when": "always", "count": 1}]
+        if config.service_log_path is not None:
+            checks.append({"tool": "inspect_service_log", "when": "service_unhealthy", "count": 1})
         dependency_count = (
             len(config.dependency_urls) + len(config.redis_dependency_urls) + len(config.mysql_dependency_urls)
         )

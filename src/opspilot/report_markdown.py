@@ -21,11 +21,15 @@ _ROUTE_BASES = {
 }
 _PLAN_CONDITIONS = {
     "always": "Always",
+    "service_unhealthy": "Service unhealthy",
     "service_unhealthy_or_unknown": "Service unhealthy or unknown",
     "queue_activity": "Pending or unacknowledged messages observed",
 }
 _EVIDENCE_FIELDS = {
     "health": "Health",
+    "error_count": "Error-level entries",
+    "window_start": "Window start",
+    "window_end": "Window end",
     "status": "State",
     "pending_messages": "Pending messages",
     "unacknowledged_messages": "Unacknowledged messages",
