@@ -117,3 +117,11 @@ python -m opspilot --db .opspilot/voting.sqlite3 compare-voting PENDING_TASK_ID 
 python -m opspilot --db .opspilot/voting.sqlite3 reports --environment docker-voting-local --voter-id 4a1c09a9dbcf77a --limit 2
 python -m opspilot --db .opspilot/voting.sqlite3 compare-voting-latest --environment docker-voting-local --voter-id 4a1c09a9dbcf77a --format markdown
 ```
+
+### 重跑真实投票验收
+
+启动 Docker Desktop，将上游投票示例的 `docker-compose.images.yml` 路径传给 pytest。测试创建独立 Compose 项目，投票入口仅绑定本机。它使用应用分配的 ID 提交一条测试投票，验证排队、入库和 Redis 不可用时的诊断及对比，结束后清理本轮的容器和数据库卷。首次运行可能需要下载上游镜像。默认 pytest 跳过这项验收。 [上游 Compose 文件](https://github.com/dockersamples/example-voting-app/blob/63e9150ca17af4ed05880d4245e486481f73fcb4/docker-compose.images.yml)
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_voting_live.py --voting-live PATH_TO_VOTING_COMPOSE -q
+```

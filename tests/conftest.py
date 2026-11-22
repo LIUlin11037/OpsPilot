@@ -27,6 +27,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store_true",
         help="Run read-only acceptance against a prepared HireHub test delivery.",
     )
+    parser.addoption(
+        "--voting-live",
+        type=Path,
+        metavar="COMPOSE_FILE",
+        help="Run isolated voting acceptance using the upstream docker-compose.images.yml.",
+    )
 
 
 @contextmanager
