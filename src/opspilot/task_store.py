@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TypedDict
 from uuid import uuid4
 
+from opspilot.adapters.voting_snapshot import is_voting_trace
 from opspilot.core.diagnosis import DiagnosisReport, DiagnosisStatus, TargetTraceSummary
 
 
@@ -66,11 +67,12 @@ def load_report(database: Path, task_id: str) -> StoredReport | None:
 def list_reports(
     database: Path, *, limit: int, delivery_id: int | None = None,
     environment: str | None = None, service_url: str | None = None, queue_source: str | None = None,
+    voter_id: str | None = None,
 ) -> list[ReportSummary]:
     if not database.exists():
         return []
 
-    filter_trace = delivery_id is not None or environment is not None
+    filter_trace = delivery_id is not None or voter_id is not None or environment is not None
     has_filters = filter_trace or service_url is not None or queue_source is not None
     summaries: list[ReportSummary] = []
     with closing(_open_read_only(database)) as connection:
@@ -87,11 +89,11 @@ def list_reports(
             }
             if filter_trace:
                 trace = report.get("target_trace")
-                if (
-                    trace is None
-                    or (delivery_id is not None and trace["entity_id"] != delivery_id)
-                    or (environment is not None and trace["environment"] != environment)
-                ):
+                if trace is None or (environment is not None and trace["environment"] != environment):
+                    continue
+                if delivery_id is not None and (trace["entity_id"] != delivery_id or is_voting_trace(trace)):
+                    continue
+                if voter_id is not None and (str(trace["entity_id"]) != voter_id or not is_voting_trace(trace)):
                     continue
                 summary["target_trace"] = trace
             if service_url is not None:

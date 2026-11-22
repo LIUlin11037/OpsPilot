@@ -6,10 +6,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from string import hexdigits
 
-from opspilot.core.diagnosis import ObservationOutcome, TraceEvidence
+from opspilot.core.diagnosis import ObservationOutcome, TargetTraceSummary, TraceEvidence
 from opspilot.core.target_trace import TargetTraceRead
 
 _ORIGINS = {"queued_vote": "Redis/votes", "stored_vote": "PostgreSQL/public.votes"}
+
+
+def is_voting_trace(trace: TargetTraceSummary) -> bool:
+    return trace["branches"].keys() == _ORIGINS.keys()
 
 
 def parse_voter_id(value: object) -> int | str | None:

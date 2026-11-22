@@ -7,10 +7,11 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
+from opspilot.adapters.hirehub_snapshot import HireHubSnapshotAdapter
 from opspilot.adapters.voting_snapshot import VotingSnapshotAdapter
 from opspilot.core.target_trace import run_target_trace
 from opspilot.report_comparison import compare_voting_reports
-from opspilot.task_store import save_report
+from opspilot.task_store import list_reports, save_report
 
 VOTER_ID = 102431
 TIMESTAMP = "2026-11-22T05:00:00Z"
@@ -149,3 +150,53 @@ def test_compare_voting_preserves_the_difference_between_zero_and_timeout(saved_
     assert {"field": "stored_vote.row_count", "before": 0, "after": None} in changes
     assert {"field": "stored_vote.outcome", "before": "observed", "after": "timeout"} in changes
     assert {"field": "stored_vote.reason", "before": None, "after": "request_timeout"} in changes
+
+
+def test_voting_history_filters_before_selecting_the_two_latest_reports(saved_voting_pair) -> None:
+    database, before, after = saved_voting_pair
+    latest = save_report(database, before)
+    other_environment = deepcopy(before)
+    other_environment["target_trace"]["environment"] = "other-environment"
+    another_scope = save_report(database, other_environment)
+    other_voter = deepcopy(after)
+    other_voter["target_trace"]["entity_id"] = "1abc"
+    save_report(database, other_voter)
+    original = database.read_bytes()
+
+    command = [sys.executable, "-m", "opspilot", "--db", str(database)]
+    filters = ["--environment", "voting-test", "--voter-id", "001abc"]
+    result = subprocess.run(
+        [*command, "reports", *filters, "--limit", "2"], capture_output=True, encoding="utf-8", timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    summaries = json.loads(result.stdout)
+    assert [summary["task_id"] for summary in summaries] == [latest["task_id"], after["task_id"]]
+
+    result = subprocess.run(
+        [*command, "compare-voting-latest", *filters], capture_output=True, encoding="utf-8", timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == compare_voting_reports(after, latest)
+
+    result = subprocess.run(
+        [*command, "compare-voting-latest", "--voter-id", "001abc", "--environment", "other-environment"],
+        capture_output=True, encoding="utf-8", timeout=20,
+    )
+    assert result.returncode == 1
+    assert "fewer than two saved voting reports" in result.stderr
+    assert list_reports(database, limit=1, voter_id="001abc")[0]["task_id"] == another_scope["task_id"]
+    assert database.read_bytes() == original
+
+
+def test_voting_and_delivery_history_distinguish_identical_numeric_ids(saved_voting_pair) -> None:
+    database, before, _ = saved_voting_pair
+    example = Path(__file__).resolve().parents[1] / "examples" / "hirehub-notification-snapshot.json"
+    delivery = run_target_trace("Check notification", 1001, HireHubSnapshotAdapter(example))
+    saved_delivery = save_report(database, delivery)
+    numeric_vote = deepcopy(before)
+    numeric_vote["target_trace"]["entity_id"] = 1001
+    numeric_vote["target_trace"]["environment"] = delivery["target_trace"]["environment"]
+    saved_vote = save_report(database, numeric_vote)
+
+    assert [item["task_id"] for item in list_reports(database, limit=5, voter_id="1001")] == [saved_vote["task_id"]]
+    assert [item["task_id"] for item in list_reports(database, limit=5, delivery_id=1001)] == [saved_delivery["task_id"]]

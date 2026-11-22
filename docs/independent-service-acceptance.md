@@ -92,3 +92,10 @@ python -m opspilot --db .opspilot/voting.sqlite3 report TASK_ID --format markdow
 ```powershell
 python -m opspilot --db .opspilot/voting.sqlite3 compare-voting PENDING_TASK_ID STORED_TASK_ID --format markdown
 ```
+
+日常复查可直接按环境和投票人 ID 选取最近保存的两份匹配报告。`reports` 可用同样的条件列出任务 ID，顺序从最新到最早。选择报告时按 ID 的原值匹配，环境标签也必须一致。
+
+```powershell
+python -m opspilot --db .opspilot/voting.sqlite3 reports --environment docker-voting-local --voter-id 4a1c09a9dbcf77a --limit 2
+python -m opspilot --db .opspilot/voting.sqlite3 compare-voting-latest --environment docker-voting-local --voter-id 4a1c09a9dbcf77a --format markdown
+```

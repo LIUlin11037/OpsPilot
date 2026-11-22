@@ -2,7 +2,7 @@
 
 from typing import Literal, TypedDict
 
-from opspilot.adapters.voting_snapshot import VotingSnapshotAdapter
+from opspilot.adapters.voting_snapshot import is_voting_trace
 from opspilot.core.diagnosis import DiagnosisStatus, Evidence, ObservationOutcome, TargetTraceSummary
 from opspilot.task_store import StoredReport
 
@@ -189,7 +189,7 @@ def compare_trace_reports(before: StoredReport, after: StoredReport) -> TraceCom
 
 def _voting_scope(trace: TargetTraceSummary) -> VotingScope:
     environment = trace["environment"]
-    if not environment or trace["branches"].keys() != set(VotingSnapshotAdapter.branches):
+    if not environment or not is_voting_trace(trace):
         raise ValueError("Both task IDs must refer to voting reports with evidence scoped to a named environment.")
     return {"environment": environment, "voter_id": str(trace["entity_id"])}
 

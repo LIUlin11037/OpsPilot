@@ -51,6 +51,7 @@ from opspilot.task_store import StoredReport, list_reports, load_report, save_re
 
 
 _LOG_CONFIG_REQUIRED = "--check-service-log requires service_log_path in the health configuration"
+_VOTER_ID_ERROR = "--voter-id must contain 1 to 255 hexadecimal digits"
 
 
 def _add_queue_options(
@@ -199,6 +200,13 @@ def _latest_comparison_task_ids(
             parser.error("--service-url must not be empty")
         filters = {"service_url": args.service_url}
         scope = "health reports for the requested service URL"
+    elif args.command == "compare-voting-latest":
+        if not args.environment.strip():
+            parser.error("--environment must not be empty")
+        if parse_voter_id(args.voter_id) is None:
+            parser.error(_VOTER_ID_ERROR)
+        filters = {"environment": args.environment, "voter_id": args.voter_id}
+        scope = "voting reports for the requested environment and voter ID"
     else:
         if not args.queue_source.strip():
             parser.error("--queue-source must not be empty")
@@ -515,8 +523,10 @@ def main() -> None:
     report_command.add_argument("--format", choices=("json", "markdown"), default="json")
     reports_command = commands.add_parser("reports", help="List recently saved reports.")
     reports_command.add_argument("--limit", type=int, default=20, help="Maximum reports (default: 20).")
-    reports_command.add_argument("--delivery-id", type=int, help="Match a HireHub delivery ID.")
-    reports_command.add_argument("--environment", help="Match a HireHub environment label.")
+    report_ids = reports_command.add_mutually_exclusive_group()
+    report_ids.add_argument("--delivery-id", type=int, help="Match a HireHub delivery ID.")
+    report_ids.add_argument("--voter-id", help="Match the exact Example Voting App voter ID.")
+    reports_command.add_argument("--environment", help="Match the exact target environment label.")
     reports_command.add_argument("--service-url", help="Match the exact main service health URL.")
     reports_command.add_argument("--queue-source", help="Match the exact queue evidence source.")
     report_comparisons = {
@@ -525,6 +535,9 @@ def main() -> None:
         ),
         "compare-voting": commands.add_parser(
             "compare-voting", help="Compare saved reports for one Example Voting App voter."
+        ),
+        "compare-voting-latest": commands.add_parser(
+            "compare-voting-latest", help="Compare the two most recently saved reports for one voter."
         ),
         "compare-http": commands.add_parser(
             "compare-http", help="Compare saved HTTP health reports for one service."
@@ -545,7 +558,8 @@ def main() -> None:
         comparison_parser.add_argument("after_task_id", help="Task ID of the follow-up report.")
     queue_comparisons = ("compare-queue", "compare-queue-latest")
     http_comparisons = ("compare-http", "compare-http-latest")
-    for command in ("compare-voting", *http_comparisons, *queue_comparisons):
+    voting_comparisons = ("compare-voting", "compare-voting-latest")
+    for command in (*voting_comparisons, *http_comparisons, *queue_comparisons):
         report_comparisons[command].add_argument(
             "--format", choices=("json", "markdown"), default="json"
         )
@@ -554,6 +568,12 @@ def main() -> None:
     )
     report_comparisons["compare-queue-latest"].add_argument(
         "--queue-source", required=True, help="Match the exact queue evidence source."
+    )
+    report_comparisons["compare-voting-latest"].add_argument(
+        "--voter-id", required=True, help="Match the exact Example Voting App voter ID."
+    )
+    report_comparisons["compare-voting-latest"].add_argument(
+        "--environment", required=True, help="Match the exact target environment label."
     )
     for command in queue_comparisons:
         report_comparisons[command].add_argument(
@@ -603,6 +623,8 @@ def main() -> None:
                 reports_command.error("--limit must be a positive 64-bit integer")
             if args.delivery_id is not None and args.delivery_id <= 0:
                 reports_command.error("--delivery-id must be positive")
+            if args.voter_id is not None and parse_voter_id(args.voter_id) is None:
+                reports_command.error(_VOTER_ID_ERROR)
             environment = args.environment
             if environment is not None and not environment.strip():
                 reports_command.error("--environment must not be empty")
@@ -613,13 +635,13 @@ def main() -> None:
             with _report_storage_errors(parser):
                 summaries = list_reports(
                     args.db, limit=args.limit, delivery_id=args.delivery_id, environment=environment,
-                    service_url=args.service_url, queue_source=args.queue_source,
+                    service_url=args.service_url, queue_source=args.queue_source, voter_id=args.voter_id,
                 )
             print(json.dumps(summaries, indent=2))
             return
         if args.command in report_comparisons:
             comparison_parser = report_comparisons[args.command]
-            if args.command in ("compare-http-latest", "compare-queue-latest"):
+            if args.command in ("compare-http-latest", "compare-queue-latest", "compare-voting-latest"):
                 before_id, after_id = _latest_comparison_task_ids(args, comparison_parser)
             else:
                 before_id, after_id = args.before_task_id, args.after_task_id
@@ -629,7 +651,7 @@ def main() -> None:
             try:
                 if args.command == "compare-hirehub":
                     comparison = compare_trace_reports(before, after)
-                elif args.command == "compare-voting":
+                elif args.command in voting_comparisons:
                     comparison = compare_voting_reports(before, after)
                     if args.format == "markdown":
                         markdown = render_voting_comparison_markdown(comparison)
@@ -682,7 +704,7 @@ def main() -> None:
                 voting.error("question must not be empty")
             voter_id = parse_voter_id(args.voter_id)
             if voter_id is None:
-                voting.error("--voter-id must contain 1 to 255 hexadecimal digits")
+                voting.error(_VOTER_ID_ERROR)
             report = run_target_trace(question, voter_id, VotingSnapshotAdapter(args.snapshot))
         elif args.command == "diagnose-hirehub":
             question = args.question.strip()
