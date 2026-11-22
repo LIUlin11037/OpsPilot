@@ -52,3 +52,35 @@ OpsPilot 侧只提供目标配置和探针账号。上游源码、OpsPilot Core 
    ```
 
 首次试验使用 3 秒超时，HTTP 探针先超时，随后示例后端才记录 500。将超时调至 8 秒后，正式验收从 HTTP 响应中观测到 500。
+
+## 投票业务链路验收
+
+同日在独立 Compose 项目中运行 Docker Example Voting App 的官方 Vote 和 Worker 镜像，以及 Redis 和 PostgreSQL。投票入口通过 Redis `votes` 列表交给 Worker，Worker 按投票人 ID 在 PostgreSQL 的 `public.votes` 表写入记录。 [上游投票入口](https://github.com/dockersamples/example-voting-app/blob/63e9150ca17af4ed05880d4245e486481f73fcb4/vote/app.py) · [上游 Worker](https://github.com/dockersamples/example-voting-app/blob/63e9150ca17af4ed05880d4245e486481f73fcb4/worker/Program.cs)
+
+在 Worker 初始化数据库后停下它，从上游 HTTP 入口为合成 ID `102432` 提交一次投票。使用 Redis `LRANGE` 在隔离队列中查找同一 `voter_id`，以及 PostgreSQL 只读会话中的 `SELECT count(*) FROM public.votes WHERE id = '102432'` 采集证据。恢复 Worker 后再采集一次。快照保留查询时间、结果和匹配数。
+
+| 阶段 | Redis `queued_vote` | PostgreSQL `stored_vote` |
+| --- | --- | --- |
+| Worker 停止时提交投票 | 1 条，`observed` | 0 条，`not_observed` |
+| Worker 恢复并处理后 | 0 条，`not_observed` | 1 条，`observed` |
+
+`diagnose-voting` 接收每次采集的快照，新适配器校验投票人 ID 和证据，现有 Core 生成报告并区分零条匹配与查询不可用。CLI 负责组装，Core 和上游源码无需改动。当前入口使用正整数类型的合成投票人 ID。投票人 ID 关联的是投票人的当前记录，报告中的独立消息 ID 留空。
+
+### 回放投票快照
+
+快照为 UTF-8 JSON，时间使用带时区的 ISO 8601，按整秒、三位毫秒或六位微秒填写。每个检查点记录 `observed`、`timeout` 或 `missing`，其中 `observed` 携带非负整数 `row_count`。下面保存为 `pending.json`。恢复快照用实际复采时间和计数填写。示例将两次报告保存在专用的投票验收数据库。
+
+```json
+{
+  "environment": "docker-voting-local",
+  "voter_id": 102432,
+  "captured_at": "2026-11-22T05:30:01+00:00",
+  "queued_vote": {"observed_at": "2026-11-22T05:30:00+00:00", "outcome": "observed", "row_count": 1},
+  "stored_vote": {"observed_at": "2026-11-22T05:30:01+00:00", "outcome": "observed", "row_count": 0}
+}
+```
+
+```powershell
+python -m opspilot --db .opspilot/voting.sqlite3 diagnose-voting --snapshot pending.json --voter-id 102432 "投票是否已处理？"
+python -m opspilot --db .opspilot/voting.sqlite3 report TASK_ID --format markdown
+```
