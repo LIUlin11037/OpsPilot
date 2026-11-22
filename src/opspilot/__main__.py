@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from opspilot.adapters.hirehub_capture import HireHubLiveAdapter
 from opspilot.adapters.hirehub_snapshot import NOTIFICATION_QUEUE, HireHubSnapshotAdapter
@@ -288,6 +288,15 @@ def _prepare_auto_diagnosis(
             raise ValueError("--delivery-id must be positive")
         if args.config is None:
             raise ValueError("--delivery-id requires --config with a HireHub snapshot")
+    voter_id = None
+    if args.voter_id is not None:
+        if args.workflow is not None:
+            raise ValueError("--voter-id selects the snapshot workflow and cannot be combined with --workflow")
+        voter_id = parse_voter_id(args.voter_id)
+        if voter_id is None:
+            raise ValueError(_VOTER_ID_ERROR)
+        if args.config is None:
+            raise ValueError("--voter-id requires --config with a voting snapshot")
     direct_options = (args.health_config, args.management_url, args.queue, args.vhost, args.timeout)
     if args.config is not None and any(value is not None for value in direct_options):
         raise ValueError("--config cannot be combined with direct target options")
@@ -302,23 +311,34 @@ def _prepare_auto_diagnosis(
     elif args.check_dependencies:
         health_option = "--check-dependencies"
 
-    if args.delivery_id is not None:
+    if args.delivery_id is not None or voter_id is not None:
         if health_option is not None:
             raise ValueError(f"{health_option} requires the HTTP health workflow")
         target = load_target_config(args.config)
-        if target.hirehub_snapshot is None:
-            raise ValueError("--delivery-id requires hirehub.snapshot in --config")
+        selected_by: Literal["delivery_id", "voter_id"]
+        if voter_id is not None:
+            if target.voting_snapshot is None:
+                raise ValueError("--voter-id requires voting.snapshot in --config")
+            selected_by = "voter_id"
+            entity_id = voter_id
+            run_snapshot = partial(run_target_trace, question, voter_id, VotingSnapshotAdapter(target.voting_snapshot))
+        else:
+            if target.hirehub_snapshot is None:
+                raise ValueError("--delivery-id requires hirehub.snapshot in --config")
+            selected_by = "delivery_id"
+            entity_id = args.delivery_id
+            run_snapshot = partial(
+                run_target_trace, question, args.delivery_id, HireHubSnapshotAdapter(target.hirehub_snapshot),
+            )
         routing: DiagnosisRoute = {
-            "workflow": "target_trace", "matched_terms": [], "selected_by": "delivery_id",
+            "workflow": "target_trace", "matched_terms": [], "selected_by": selected_by,
         }
         plan: _AutoDiagnosisPlan = {
             "question": question, "routing": routing,
-            "scope": {"delivery_id": args.delivery_id},
+            "scope": {selected_by: entity_id},
             "checks": [{"tool": "inspect_target_trace", "when": "always", "count": 1}],
         }
-        return plan, partial(
-            run_target_trace, question, args.delivery_id, HireHubSnapshotAdapter(target.hirehub_snapshot),
-        )
+        return plan, run_snapshot
 
     routing = select_diagnosis_route(
         question, message_lookup=args.message_id is not None, workflow=args.workflow,
@@ -476,7 +496,7 @@ def main() -> None:
     )
     health.add_argument("question", help="Incident description.")
     auto_diagnose = commands.add_parser(
-        "diagnose-auto", help="Choose a configured HTTP, RabbitMQ, or HireHub snapshot workflow.",
+        "diagnose-auto", help="Choose a configured HTTP, RabbitMQ, or business snapshot workflow.",
     )
     auto_diagnose.add_argument("--config", type=Path, help="JSON file with workflows for a target.")
     auto_diagnose.add_argument("--health-config", type=Path, help="JSON file with health endpoints.")
@@ -489,6 +509,7 @@ def main() -> None:
     auto_scope = auto_diagnose.add_mutually_exclusive_group()
     auto_scope.add_argument("--message-id", help="Look up an exact message in the configured processing source.")
     auto_scope.add_argument("--delivery-id", type=int, help="Trace a delivery in the configured HireHub snapshot.")
+    auto_scope.add_argument("--voter-id", help="Trace a voter in the configured voting snapshot.")
     auto_diagnose.add_argument("question", help="Incident description.")
     for health_parser in (health, auto_diagnose):
         health_parser.add_argument(

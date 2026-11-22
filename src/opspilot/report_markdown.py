@@ -17,6 +17,7 @@ _MARKDOWN = re.compile(r"([\\`*_\[\]|~])")
 _ROUTE_BASES = {
     "message_id": "Requested message ID",
     "delivery_id": "Requested delivery ID",
+    "voter_id": "Requested voter ID",
     "workflow": "Explicit workflow",
 }
 _PLAN_CONDITIONS = {

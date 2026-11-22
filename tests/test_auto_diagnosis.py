@@ -135,6 +135,13 @@ def test_auto_diagnosis_checks_dependencies_of_a_healthy_service(processing_serv
          "Check backlog", "--check-dependencies requires the HTTP health workflow"),
         (["--check-dependencies", "--config", "unused.json", "--delivery-id", "1001"],
          "Trace delivery", "--check-dependencies requires the HTTP health workflow"),
+        (["--voter-id", "001abc"], "Trace voter", "--voter-id requires --config"),
+        (["--voter-id", "not-hex", "--config", "unused.json"],
+         "Trace voter", "--voter-id must contain 1 to 255 hexadecimal digits"),
+        (["--voter-id", "001abc", "--workflow", "http_health"],
+         "Trace voter", "cannot be combined with --workflow"),
+        (["--voter-id", "001abc", "--delivery-id", "1001"],
+         "Trace voter", "not allowed with argument --voter-id"),
     ],
 )
 def test_auto_diagnosis_requires_clear_and_configured_symptoms(options, question, error) -> None:
@@ -483,14 +490,69 @@ def test_auto_delivery_trace_requires_hirehub_snapshot_configuration() -> None:
         assert not (Path(directory) / ".opspilot").exists()
 
 
+def test_auto_voting_trace_previews_then_reads_the_configured_snapshot() -> None:
+    with TemporaryDirectory(prefix="opspilot-target-voting-") as directory:
+        config_dir = Path(directory) / "configs"
+        config_dir.mkdir()
+        snapshot = config_dir / "pending vote.json"
+        config = config_dir / "target.json"
+        config.write_text(json.dumps({
+            "voting": {"snapshot": snapshot.name},
+            "hirehub": {"snapshot": "no-delivery-file.json"},
+            "health": {"service_url": "http://localhost/health"},
+        }), encoding="utf-8")
+        question = "HTTP 503，队列积压，投票是否已入库？"
+        options = ("diagnose-auto", "--config", str(config), "--voter-id", "001abc", question)
+        preview = _cli(directory, *options, "--plan")
+        assert preview.returncode == 0, preview.stderr
+        plan = json.loads(preview.stdout)
+        assert plan == {
+            "question": question,
+            "routing": {"workflow": "target_trace", "matched_terms": [], "selected_by": "voter_id"},
+            "scope": {"voter_id": "001abc"},
+            "checks": [{"tool": "inspect_target_trace", "when": "always", "count": 1}],
+        }
+        assert not (Path(directory) / ".opspilot").exists()
+
+        observed_at = "2026-11-22T05:00:00+00:00"
+        snapshot.write_text(json.dumps({
+            "environment": "voting-test", "voter_id": "001abc", "captured_at": observed_at,
+            "queued_vote": {"observed_at": observed_at, "outcome": "observed", "row_count": 1},
+            "stored_vote": {"observed_at": observed_at, "outcome": "observed", "row_count": 0},
+        }), encoding="utf-8")
+        result = _cli(directory, *options)
+        assert result.returncode == 0, result.stderr
+        report = json.loads(result.stdout)
+        assert report["routing"] == plan["routing"]
+        assert report["planned_checks"] == plan["checks"]
+        assert report["target_trace"]["entity_id"] == "001abc"
+        assert report["target_trace"]["branches"] == {"queued_vote": "observed", "stored_vote": "not_observed"}
+        assert report["evidence"][0]["source"] == f"{snapshot.as_uri()}#queued_vote"
+        markdown = _cli(directory, "report", report["task_id"], "--format", "markdown")
+        assert markdown.returncode == 0, markdown.stderr
+        assert "**Selection basis** Requested voter ID" in markdown.stdout
+
+
+def test_auto_voting_trace_requires_voting_snapshot_configuration() -> None:
+    with TemporaryDirectory(prefix="opspilot-target-voting-") as directory:
+        config = Path(directory) / "target.json"
+        config.write_text('{"hirehub": {"snapshot": "delivery.json"}}', encoding="utf-8")
+        result = _cli(directory, "diagnose-auto", "--config", str(config), "--voter-id", "001abc", "Trace voter")
+        assert result.returncode == 2
+        assert "--voter-id requires voting.snapshot in --config" in result.stderr
+        assert not (Path(directory) / ".opspilot").exists()
+
+
 @pytest.mark.parametrize(
     ("data", "error"),
     [
-        ({}, "requires a health, rabbitmq, or hirehub section"),
+        ({}, "requires a health, rabbitmq, hirehub, or voting section"),
         ({"health": None}, "health must be a JSON object"),
         ({"hirehub": {"snapshot": ""}}, "hirehub.snapshot must be a nonempty path"),
         ({"hirehub": {"snapshot": "snapshot.json", "management_url": "http://localhost"}},
          "HireHub configuration contains unsupported fields"),
+        ({"voting": []}, "voting must be a JSON object"),
+        ({"voting": {"snapshot": ""}}, r"voting\.snapshot must be a nonempty path"),
         ({"rabbitmq": {"management_url": "http://localhost"}}, "rabbitmq.queue must be a nonempty string"),
         ({"rabbitmq": {"management_url": "http://localhost", "queue": "orders", "password": "fixture"}},
          "unsupported fields"),
