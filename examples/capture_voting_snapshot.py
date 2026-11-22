@@ -6,9 +6,9 @@ import subprocess
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TypedDict
+from typing import Literal, TypedDict
 
-from opspilot.adapters.voting_snapshot import parse_voter_id
+from opspilot.adapters.voting_snapshot import VotingMissingReason, parse_voter_id
 from opspilot.core.diagnosis import ObservationOutcome
 
 _QUEUE_LIMIT = 1000
@@ -22,6 +22,11 @@ class _ObservationFields(TypedDict):
 
 class _Observation(_ObservationFields, total=False):
     row_count: int
+    reason: VotingMissingReason | Literal["request_timeout"]
+
+
+class _QueueSampleLimitExceeded(ValueError):
+    pass
 
 
 def _read_output(command: list[str], *, sql: str = "") -> str:
@@ -36,8 +41,10 @@ def _redis_count(compose: list[str], voter_id: str) -> int:
     ])
     entries = json.loads(output)
     # LRANGE includes the last index, so a full response can reveal an incomplete sample.
-    if not isinstance(entries, list) or len(entries) > _QUEUE_LIMIT:
-        raise ValueError("The Redis response is unavailable or exceeds the sample limit.")
+    if not isinstance(entries, list):
+        raise ValueError("Expected a Redis list response.")
+    if len(entries) > _QUEUE_LIMIT:
+        raise _QueueSampleLimitExceeded("The Redis queue exceeds the sample limit.")
 
     count = 0
     for raw in entries:
@@ -69,8 +76,15 @@ def _observe(read: Callable[[list[str], str], int], compose: list[str], voter_id
         evidence["row_count"] = read(compose, voter_id)
     except subprocess.TimeoutExpired:
         evidence["outcome"] = "timeout"
-    except (OSError, ValueError, RecursionError, subprocess.CalledProcessError):
-        pass
+        evidence["reason"] = "request_timeout"
+    except _QueueSampleLimitExceeded:
+        evidence["reason"] = "queue_sample_limit_exceeded"
+    except subprocess.CalledProcessError:
+        evidence["reason"] = "source_query_failed"
+    except OSError:
+        evidence["reason"] = "collector_unavailable"
+    except (ValueError, RecursionError):
+        evidence["reason"] = "invalid_source_response"
     else:
         evidence["outcome"] = "observed"
     return evidence

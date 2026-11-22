@@ -5,11 +5,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from string import hexdigits
+from typing import Literal, get_args
 
 from opspilot.core.diagnosis import ObservationOutcome, TargetTraceSummary, TraceEvidence
 from opspilot.core.target_trace import TargetTraceRead
 
 _ORIGINS = {"queued_vote": "Redis/votes", "stored_vote": "PostgreSQL/public.votes"}
+VotingMissingReason = Literal[
+    "collector_unavailable", "source_query_failed", "invalid_source_response", "queue_sample_limit_exceeded",
+]
+_MISSING_REASONS = get_args(VotingMissingReason)
 
 
 def is_voting_trace(trace: TargetTraceSummary) -> bool:
@@ -66,7 +71,8 @@ def _observation(snapshot: dict[str, object], branch: str, source: str, captured
         evidence["outcome"] = "timeout"
         evidence["reason"] = "request_timeout"
     elif outcome == "missing":
-        evidence["reason"] = "source_unavailable"
+        reason = section.get("reason")
+        evidence["reason"] = reason if isinstance(reason, str) and reason in _MISSING_REASONS else "source_unavailable"
     return evidence
 
 

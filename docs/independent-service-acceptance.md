@@ -76,7 +76,17 @@ OpsPilot 侧只提供目标配置和探针账号。上游源码、OpsPilot Core 
 python examples/capture_voting_snapshot.py --project-name voting-demo --compose-file PATH_TO_VOTING_COMPOSE --environment docker-voting-local --voter-id 4a1c09a9dbcf77a | Out-File -Encoding utf8 pending.json
 ```
 
-导出使用示例容器自带的 `redis-cli` 和 `psql`。Redis 证据限于不超过 1000 条记录的隔离队列，超过上限会记为 `missing`。PostgreSQL 查询在只读会话内按 ID 统计。两个检查点分别采集并记录各自的观测时间，Worker 可能在两次读取之间处理投票。单个数据源超时或不可用时仍会采集另一侧。快照只保留匹配数和观测结果。另一次独立验收停止了 Redis，脚本仍导出了 PostgreSQL 中已入库的一条记录。 [Redis CLI](https://redis.io/docs/latest/develop/tools/cli/) · [psql](https://www.postgresql.org/docs/15/app-psql.html#APP-PSQL-INTERPOLATION)
+导出使用示例容器自带的 `redis-cli` 和 `psql`。Redis 证据限于不超过 1000 条记录的隔离队列，超过上限会记为 `missing`。PostgreSQL 查询在只读会话内按 ID 统计。两个检查点分别采集并记录各自的观测时间，Worker 可能在两次读取之间处理投票。单个数据源超时或不可用时仍会采集另一侧。一次独立验收停止了 Redis，脚本仍导出了 PostgreSQL 中已入库的一条记录。 [Redis CLI](https://redis.io/docs/latest/develop/tools/cli/) · [psql](https://www.postgresql.org/docs/15/app-psql.html#APP-PSQL-INTERPOLATION)
+
+数据源不可用时，快照、诊断和复查对比可保留下列原因码。旧快照省略 `reason` 时仍可回放，报告会使用 `source_unavailable`。采集程序的原始错误输出留在采集过程内。
+
+| 原因 | 含义 |
+| --- | --- |
+| `request_timeout` | 采集命令超时 |
+| `collector_unavailable` | 采集命令无法启动 |
+| `source_query_failed` | 采集命令执行失败，例如 Redis 容器停止 |
+| `invalid_source_response` | 响应无法解析为可统计的观测 |
+| `queue_sample_limit_exceeded` | Redis 队列超过采样上限，匹配数未知 |
 
 快照为 UTF-8 JSON。应用分配的 `voter_id` 写成字符串，匹配保留大小写和前导零。整数字段仍可用于原有测试快照。时间使用带时区的 ISO 8601，按整秒、三位毫秒或六位微秒填写。每个检查点记录 `observed`、`timeout` 或 `missing`，其中 `observed` 携带非负整数 `row_count`。下面是一个可保存为 `pending.json` 的回放示例。恢复快照用实际复采时间和计数填写。示例将两次报告保存在专用的投票验收数据库。
 

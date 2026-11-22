@@ -41,18 +41,31 @@ def test_capture_uses_read_only_commands_and_round_trips_the_snapshot(monkeypatc
     assert (stored["outcome"], stored["row_count"]) == ("observed", 0)
 
 
-@pytest.mark.parametrize("redis_outcome", ["timeout", "missing"])
-def test_capture_records_incomplete_redis_reads_and_continues_to_postgres(monkeypatch, redis_outcome) -> None:
+@pytest.mark.parametrize(("mode", "outcome", "reason"), [
+    ("timeout", "timeout", "request_timeout"),
+    ("over_limit", "missing", "queue_sample_limit_exceeded"),
+    ("invalid_output", "missing", "invalid_source_response"),
+    ("query_failed", "missing", "source_query_failed"),
+    ("collector_failed", "missing", "collector_unavailable"),
+])
+def test_capture_preserves_redis_failure_reason_and_continues_to_postgres(monkeypatch, mode, outcome, reason) -> None:
     def run(command, *, timeout, **_options):
         if "redis-cli" not in command:
             return subprocess.CompletedProcess(command, 0, "1\n")
-        if redis_outcome == "timeout":
+        if mode == "timeout":
             raise subprocess.TimeoutExpired(command, timeout)
-        return subprocess.CompletedProcess(command, 0, json.dumps(["{}"] * 1001))
+        if mode == "query_failed":
+            raise subprocess.CalledProcessError(1, command, stderr="raw-endpoint-error")
+        if mode == "collector_failed":
+            raise FileNotFoundError("raw-endpoint-error")
+        output = json.dumps(["{}"] * 1001) if mode == "over_limit" else "raw-endpoint-error"
+        return subprocess.CompletedProcess(command, 0, output)
 
     monkeypatch.setattr(capture_voting_snapshot.subprocess, "run", run)
     snapshot = capture_voting_snapshot.capture_snapshot(COMPOSE, "voting-test", VOTER_ID)
-    assert snapshot["queued_vote"]["outcome"] == redis_outcome
+    assert snapshot["queued_vote"]["outcome"] == outcome
+    assert snapshot["queued_vote"]["reason"] == reason
     assert "row_count" not in snapshot["queued_vote"]
     assert snapshot["stored_vote"]["outcome"] == "observed"
     assert snapshot["stored_vote"]["row_count"] == 1
+    assert "raw-endpoint-error" not in json.dumps(snapshot)

@@ -57,6 +57,9 @@ def test_voting_cli_saves_a_target_trace_for_a_queued_vote(voter_id) -> None:
     ({"outcome": "observed", "row_count": 1}, "observed", None),
     ({"outcome": "timeout"}, "unknown", "request_timeout"),
     ({"outcome": "observed", "row_count": False}, "unknown", "invalid_observation"),
+    ({"outcome": "missing", "reason": "source_query_failed"}, "unknown", "source_query_failed"),
+    ({"outcome": "missing", "reason": "arbitrary source details"}, "unknown", "source_unavailable"),
+    ({"outcome": "missing"}, "unknown", "source_unavailable"),
 ])
 def test_voting_keeps_zero_matches_distinct_from_unavailable_evidence(stored, expected, reason) -> None:
     with TemporaryDirectory(prefix="opspilot-voting-") as directory:
