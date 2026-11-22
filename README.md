@@ -370,3 +370,5 @@ $env:OPSPILOT_RABBITMQ_PASSWORD = "opspilot_local_only"
 ```
 
 HireHub 的投递通知用例已通过隔离环境验收。`diagnose-hirehub` 支持直接诊断隔离环境或读取本地快照，`capture-hirehub` 可单独导出证据。 [HireHub 只读验收](docs/hirehub-readonly-acceptance.md)
+
+Docker Awesome Compose 的 NGINX、Go 和 MariaDB 示例也已通过配置接入，完成数据库故障诊断和恢复复查。 [独立服务接入验收](docs/independent-service-acceptance.md)
