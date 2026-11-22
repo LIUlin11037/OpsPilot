@@ -86,3 +86,9 @@ OpsPilot 侧只提供目标配置和探针账号。上游源码、OpsPilot Core 
 python -m opspilot --db .opspilot/voting.sqlite3 diagnose-voting --snapshot pending.json --voter-id 4a1c09a9dbcf77a "投票是否已处理？"
 python -m opspilot --db .opspilot/voting.sqlite3 report TASK_ID --format markdown
 ```
+
+使用同一环境和投票人 ID 的两份报告生成复查对比。命令默认输出 JSON，加上 `--format markdown` 可生成表格。对比保留排队和入库状态、匹配数、查询结果及失败原因的变化。查询匹配数为 `0` 和查询超时各自保留原来的含义。
+
+```powershell
+python -m opspilot --db .opspilot/voting.sqlite3 compare-voting PENDING_TASK_ID STORED_TASK_ID --format markdown
+```

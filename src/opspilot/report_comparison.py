@@ -2,6 +2,7 @@
 
 from typing import Literal, TypedDict
 
+from opspilot.adapters.voting_snapshot import VotingSnapshotAdapter
 from opspilot.core.diagnosis import DiagnosisStatus, Evidence, ObservationOutcome, TargetTraceSummary
 from opspilot.task_store import StoredReport
 
@@ -25,6 +26,18 @@ class TraceComparison(TypedDict):
     before_task_id: str
     after_task_id: str
     target: TraceScope
+    changes: list[FieldChange]
+
+
+class VotingScope(TypedDict):
+    environment: str
+    voter_id: str
+
+
+class VotingComparison(TypedDict):
+    before_task_id: str
+    after_task_id: str
+    target: VotingScope
     changes: list[FieldChange]
 
 
@@ -170,6 +183,45 @@ def compare_trace_reports(before: StoredReport, after: StoredReport) -> TraceCom
         "changes": _changed_fields(
             _trace_values(before_trace, before["evidence"]),
             _trace_values(after_trace, after["evidence"]),
+        ),
+    }
+
+
+def _voting_scope(trace: TargetTraceSummary) -> VotingScope:
+    environment = trace["environment"]
+    if not environment or trace["branches"].keys() != set(VotingSnapshotAdapter.branches):
+        raise ValueError("Both task IDs must refer to voting reports with evidence scoped to a named environment.")
+    return {"environment": environment, "voter_id": str(trace["entity_id"])}
+
+
+def _voting_values(trace: TargetTraceSummary, evidence: list[Evidence]) -> dict[str, ComparisonValue]:
+    values = _trace_values(trace, evidence)
+    for item in evidence:
+        if item["tool"] != "inspect_target_trace":
+            continue
+        branch = item.get("branch")
+        if branch not in trace["branches"]:
+            continue
+        values[f"{branch}.outcome"] = item["outcome"]
+        values[f"{branch}.row_count"] = item.get("row_count")
+        values[f"{branch}.reason"] = item.get("reason")
+    return values
+
+
+def compare_voting_reports(before: StoredReport, after: StoredReport) -> VotingComparison:
+    before_trace = before.get("target_trace")
+    after_trace = after.get("target_trace")
+    if before_trace is None or after_trace is None:
+        raise ValueError("Both task IDs must refer to voting reports with evidence scoped to a named environment.")
+    scope = _voting_scope(before_trace)
+    if scope != _voting_scope(after_trace):
+        raise ValueError("Reports must match on environment and exact voter ID.")
+
+    return {
+        "before_task_id": before["task_id"], "after_task_id": after["task_id"], "target": scope,
+        "changes": _changed_fields(
+            _voting_values(before_trace, before["evidence"]),
+            _voting_values(after_trace, after["evidence"]),
         ),
     }
 

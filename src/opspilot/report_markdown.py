@@ -9,6 +9,7 @@ from opspilot.report_comparison import (
     EndpointChange,
     HealthComparison,
     QueueComparison,
+    VotingComparison,
 )
 from opspilot.task_store import StoredReport
 
@@ -24,6 +25,16 @@ _PLAN_CONDITIONS = {
     "service_unhealthy_or_unknown": "Service unhealthy or unknown",
     "service_unhealthy_or_unknown_or_log_errors": "Service unhealthy or unknown, or service log errors observed",
     "queue_activity": "Pending or unacknowledged messages observed",
+}
+_VOTING_FIELDS = {
+    "branches.queued_vote": "Redis queue status",
+    "branches.stored_vote": "PostgreSQL record status",
+    "queued_vote.outcome": "Redis query outcome",
+    "queued_vote.row_count": "Redis matching rows",
+    "queued_vote.reason": "Redis reason",
+    "stored_vote.outcome": "PostgreSQL query outcome",
+    "stored_vote.row_count": "PostgreSQL matching rows",
+    "stored_vote.reason": "PostgreSQL reason",
 }
 _EVIDENCE_FIELDS = {
     "health": "Health",
@@ -90,6 +101,27 @@ def _endpoint_change_lines(changes: list[EndpointChange]) -> list[str]:
             f"{_comparison_observation(change['after'])} |"
         )
     return lines
+
+
+def render_voting_comparison_markdown(comparison: VotingComparison) -> str:
+    target = comparison["target"]
+    lines = [
+        "# OpsPilot voting report comparison",
+        "",
+        f"- **Environment** {_value(target['environment'])}",
+        f"- **Voter ID** {_value(target['voter_id'])}",
+        f"- **Baseline task ID** {_value(comparison['before_task_id'])}",
+        f"- **Follow-up task ID** {_value(comparison['after_task_id'])}",
+        "",
+    ]
+    if not comparison["changes"]:
+        lines.append("No changes in recorded voting observations.")
+    else:
+        lines.extend(["| Observation | Baseline | Follow-up |", "| --- | --- | --- |"])
+        for change in comparison["changes"]:
+            label = _VOTING_FIELDS.get(change["field"], change["field"])
+            lines.append(f"| {_value(label)} | {_value(change['before'])} | {_value(change['after'])} |")
+    return "\n".join(lines) + "\n"
 
 
 def render_queue_comparison_markdown(comparison: QueueComparison) -> str:
