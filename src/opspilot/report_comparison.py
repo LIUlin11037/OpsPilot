@@ -11,7 +11,7 @@ ComparisonValue = str | int | None
 class TraceScope(TypedDict):
     environment: str
     vhost: str
-    entity_id: int
+    entity_id: int | str
     message_id: str
 
 

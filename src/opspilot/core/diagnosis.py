@@ -209,7 +209,7 @@ BranchStatus = Literal["observed", "not_observed", "unknown"]
 class TargetTraceSummary(TypedDict):
     environment: str | None
     vhost: str | None
-    entity_id: int
+    entity_id: int | str
     message_id: str | None
     branches: dict[str, BranchStatus]
 

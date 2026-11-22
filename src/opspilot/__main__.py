@@ -16,7 +16,7 @@ from opspilot.adapters.hirehub_snapshot import NOTIFICATION_QUEUE, HireHubSnapsh
 from opspilot.adapters.http_processing import HttpProcessingAdapter
 from opspilot.adapters.json_processing import JsonProcessingAdapter
 from opspilot.adapters.simulated import SimulatedProcessingAdapter
-from opspilot.adapters.voting_snapshot import VotingSnapshotAdapter
+from opspilot.adapters.voting_snapshot import VotingSnapshotAdapter, parse_voter_id
 from opspilot.connectors.http_health import HttpHealthConnector
 from opspilot.connectors.jsonl_service_log import JsonlServiceLogConnector
 from opspilot.connectors.mysql import MySQLConnector, MySQLHealthConnector
@@ -490,7 +490,7 @@ def main() -> None:
         )
     voting = commands.add_parser("diagnose-voting", help="Trace a voter in an Example Voting App evidence export.")
     voting.add_argument("--snapshot", type=Path, required=True, help="Local voting evidence snapshot.")
-    voting.add_argument("--voter-id", type=int, required=True, help="Positive numeric voter identifier.")
+    voting.add_argument("--voter-id", required=True, help="Voter ID from the snapshot, including hexadecimal IDs.")
     voting.add_argument("question", help="Incident description.")
     hirehub = commands.add_parser(
         "diagnose-hirehub", help="Diagnose a HireHub delivery with live reads or a snapshot."
@@ -670,9 +670,10 @@ def main() -> None:
             question = args.question.strip()
             if not question:
                 voting.error("question must not be empty")
-            if args.voter_id <= 0:
-                voting.error("--voter-id must be positive")
-            report = run_target_trace(question, args.voter_id, VotingSnapshotAdapter(args.snapshot))
+            voter_id = parse_voter_id(args.voter_id)
+            if voter_id is None:
+                voting.error("--voter-id must contain 1 to 255 hexadecimal digits")
+            report = run_target_trace(question, voter_id, VotingSnapshotAdapter(args.snapshot))
         elif args.command == "diagnose-hirehub":
             question = args.question.strip()
             if not question:

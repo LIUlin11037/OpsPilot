@@ -64,16 +64,18 @@ OpsPilot 侧只提供目标配置和探针账号。上游源码、OpsPilot Core 
 | Worker 停止时提交投票 | 1 条，`observed` | 0 条，`not_observed` |
 | Worker 恢复并处理后 | 0 条，`not_observed` | 1 条，`observed` |
 
-`diagnose-voting` 接收每次采集的快照，新适配器校验投票人 ID 和证据，现有 Core 生成报告并区分零条匹配与查询不可用。CLI 负责组装，Core 和上游源码无需改动。当前入口使用正整数类型的合成投票人 ID。投票人 ID 关联的是投票人的当前记录，报告中的独立消息 ID 留空。
+`diagnose-voting` 接收每次采集的快照，适配器校验投票人 ID 和证据，Core 生成报告并区分零条匹配与查询不可用。首轮使用正整数测试 ID，接入时复用了既有诊断编排。投票人 ID 关联的是投票人的当前记录，报告中的独立消息 ID 留空。
+
+复验使用投票页面响应中的 `voter_id` Cookie，应用生成了 `4a1c09a9dbcf77a`。随后用该 Cookie 提交投票，两次采集均按原值查找。Worker 停止时 Redis 和 PostgreSQL 分别匹配 1 条和 0 条，恢复后分别匹配 0 条和 1 条。两份报告保存了完整的字符串 ID。为支持这类目标，Core 的通用实体 ID 契约扩展为整数或字符串，诊断编排保持一致。HireHub 的整数投递 ID 和已有的整数投票快照可继续使用。
 
 ### 回放投票快照
 
-快照为 UTF-8 JSON，时间使用带时区的 ISO 8601，按整秒、三位毫秒或六位微秒填写。每个检查点记录 `observed`、`timeout` 或 `missing`，其中 `observed` 携带非负整数 `row_count`。下面保存为 `pending.json`。恢复快照用实际复采时间和计数填写。示例将两次报告保存在专用的投票验收数据库。
+快照为 UTF-8 JSON。应用分配的 `voter_id` 写成字符串，匹配保留大小写和前导零。整数字段仍可用于原有测试快照。时间使用带时区的 ISO 8601，按整秒、三位毫秒或六位微秒填写。每个检查点记录 `observed`、`timeout` 或 `missing`，其中 `observed` 携带非负整数 `row_count`。下面保存为 `pending.json`。恢复快照用实际复采时间和计数填写。示例将两次报告保存在专用的投票验收数据库。
 
 ```json
 {
   "environment": "docker-voting-local",
-  "voter_id": 102432,
+  "voter_id": "4a1c09a9dbcf77a",
   "captured_at": "2026-11-22T05:30:01+00:00",
   "queued_vote": {"observed_at": "2026-11-22T05:30:00+00:00", "outcome": "observed", "row_count": 1},
   "stored_vote": {"observed_at": "2026-11-22T05:30:01+00:00", "outcome": "observed", "row_count": 0}
@@ -81,6 +83,6 @@ OpsPilot 侧只提供目标配置和探针账号。上游源码、OpsPilot Core 
 ```
 
 ```powershell
-python -m opspilot --db .opspilot/voting.sqlite3 diagnose-voting --snapshot pending.json --voter-id 102432 "投票是否已处理？"
+python -m opspilot --db .opspilot/voting.sqlite3 diagnose-voting --snapshot pending.json --voter-id 4a1c09a9dbcf77a "投票是否已处理？"
 python -m opspilot --db .opspilot/voting.sqlite3 report TASK_ID --format markdown
 ```

@@ -1,6 +1,6 @@
 """Summarize message-trace evidence from a read-only target adapter."""
 
-from typing import Protocol, TypedDict
+from typing import Protocol, TypedDict, TypeVar
 
 from langgraph.graph import END, START, StateGraph
 
@@ -24,16 +24,18 @@ class TargetTraceRead(TypedDict):
     checks: list[TraceEvidence]
 
 
-class TargetTraceSource(Protocol):
+_EntityId = TypeVar("_EntityId", bound=int | str, contravariant=True)
+
+
+class TargetTraceSource(Protocol[_EntityId]):
     @property
     def branches(self) -> tuple[str, ...]: ...
 
-    def inspect_trace(self, entity_id: int) -> TargetTraceRead: ...
+    def inspect_trace(self, entity_id: _EntityId) -> TargetTraceRead: ...
 
 
 class _TraceState(TypedDict, total=False):
     question: str
-    entity_id: int
     trace: TargetTraceRead
     call: ToolCall
     report: DiagnosisReport
@@ -49,12 +51,10 @@ def _branch_status(evidence: TraceEvidence) -> BranchStatus:
 
 
 def run_target_trace(
-    question: str, entity_id: int, source: TargetTraceSource
+    question: str, entity_id: _EntityId, source: TargetTraceSource[_EntityId]
 ) -> DiagnosisReport:
-    def inspect_trace(state: _TraceState) -> _TraceState:
-        trace, duration_ms = measure_tool_call(
-            lambda: source.inspect_trace(state["entity_id"])
-        )
+    def inspect_trace(_state: _TraceState) -> _TraceState:
+        trace, duration_ms = measure_tool_call(lambda: source.inspect_trace(entity_id))
         return {
             "trace": trace,
             "call": {
@@ -96,7 +96,7 @@ def run_target_trace(
                 "target_trace": {
                     "environment": trace["environment"],
                     "vhost": trace["vhost"],
-                    "entity_id": state["entity_id"],
+                    "entity_id": entity_id,
                     "message_id": trace["message_id"],
                     "branches": branches,
                 },
@@ -112,4 +112,4 @@ def run_target_trace(
     graph.add_edge(START, "inspect_target_trace")
     graph.add_edge("inspect_target_trace", "report")
     graph.add_edge("report", END)
-    return graph.compile().invoke({"question": question, "entity_id": entity_id})["report"]
+    return graph.compile().invoke({"question": question})["report"]

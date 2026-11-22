@@ -4,11 +4,24 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from string import hexdigits
 
 from opspilot.core.diagnosis import ObservationOutcome, TraceEvidence
 from opspilot.core.target_trace import TargetTraceRead
 
 _ORIGINS = {"queued_vote": "Redis/votes", "stored_vote": "PostgreSQL/public.votes"}
+
+
+def parse_voter_id(value: object) -> int | str | None:
+    if type(value) is int:
+        return value if value > 0 else None
+    if not isinstance(value, str) or not 1 <= len(value) <= 255:
+        return None
+    if any(digit not in hexdigits for digit in value):
+        return None
+    if value.isdecimal() and not value.startswith("0"):
+        return int(value)
+    return value
 
 
 def _timestamp(value: object) -> str | None:
@@ -58,7 +71,7 @@ class VotingSnapshotAdapter:
     path: Path
     branches = tuple(_ORIGINS)
 
-    def inspect_trace(self, entity_id: int) -> TargetTraceRead:
+    def inspect_trace(self, entity_id: int | str) -> TargetTraceRead:
         source = self.path.absolute().as_uri()
         try:
             snapshot = json.loads(self.path.read_text(encoding="utf-8-sig"))
@@ -70,12 +83,12 @@ class VotingSnapshotAdapter:
             return self._unavailable(source, "invalid_snapshot")
         environment = snapshot.get("environment")
         captured_at = _timestamp(snapshot.get("captured_at"))
-        voter_id = snapshot.get("voter_id")
+        voter_id = parse_voter_id(snapshot.get("voter_id"))
         if not isinstance(environment, str) or not environment.strip() or captured_at is None:
             return self._unavailable(source, "invalid_snapshot")
-        if type(voter_id) is not int or voter_id <= 0:
+        if voter_id is None:
             return self._unavailable(source, "invalid_snapshot")
-        if voter_id != entity_id:
+        if str(voter_id) != str(entity_id):
             return self._unavailable(source, "voter_id_mismatch")
 
         checks = [_observation(snapshot, branch, source, captured_at) for branch in self.branches]
