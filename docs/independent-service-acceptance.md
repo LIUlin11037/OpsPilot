@@ -70,7 +70,15 @@ OpsPilot 侧只提供目标配置和探针账号。上游源码、OpsPilot Core 
 
 ### 回放投票快照
 
-快照为 UTF-8 JSON。应用分配的 `voter_id` 写成字符串，匹配保留大小写和前导零。整数字段仍可用于原有测试快照。时间使用带时区的 ISO 8601，按整秒、三位毫秒或六位微秒填写。每个检查点记录 `observed`、`timeout` 或 `missing`，其中 `observed` 携带非负整数 `row_count`。下面保存为 `pending.json`。恢复快照用实际复采时间和计数填写。示例将两次报告保存在专用的投票验收数据库。
+对已运行的隔离投票示例，可以直接导出快照。传入示例的 Compose 项目名、所用的 Compose 文件、环境标签和页面分配的投票人 ID。若使用多个 Compose 文件，按启动时的顺序重复传入 `--compose-file`。
+
+```powershell
+python examples/capture_voting_snapshot.py --project-name voting-demo --compose-file PATH_TO_VOTING_COMPOSE --environment docker-voting-local --voter-id 4a1c09a9dbcf77a | Out-File -Encoding utf8 pending.json
+```
+
+导出使用示例容器自带的 `redis-cli` 和 `psql`。Redis 证据限于不超过 1000 条记录的隔离队列，超过上限会记为 `missing`。PostgreSQL 查询在只读会话内按 ID 统计。两个检查点分别采集并记录各自的观测时间，Worker 可能在两次读取之间处理投票。单个数据源超时或不可用时仍会采集另一侧。快照只保留匹配数和观测结果。另一次独立验收停止了 Redis，脚本仍导出了 PostgreSQL 中已入库的一条记录。 [Redis CLI](https://redis.io/docs/latest/develop/tools/cli/) · [psql](https://www.postgresql.org/docs/15/app-psql.html#APP-PSQL-INTERPOLATION)
+
+快照为 UTF-8 JSON。应用分配的 `voter_id` 写成字符串，匹配保留大小写和前导零。整数字段仍可用于原有测试快照。时间使用带时区的 ISO 8601，按整秒、三位毫秒或六位微秒填写。每个检查点记录 `observed`、`timeout` 或 `missing`，其中 `observed` 携带非负整数 `row_count`。下面是一个可保存为 `pending.json` 的回放示例。恢复快照用实际复采时间和计数填写。示例将两次报告保存在专用的投票验收数据库。
 
 ```json
 {
