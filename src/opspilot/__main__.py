@@ -637,6 +637,10 @@ def main() -> None:
             "--include-consumer-health", action="store_true",
             help="Include changes in saved consumer endpoint observations.",
         )
+    report_comparisons["compare-queue"].add_argument(
+        "--include-processing", action="store_true",
+        help="Compare processing observations for the same explicitly requested message and source.",
+    )
     for command in http_comparisons:
         report_comparisons[command].add_argument(
             "--include-service-log", action="store_true",
@@ -715,6 +719,7 @@ def main() -> None:
                 elif args.command in queue_comparisons:
                     comparison = compare_queue_reports(
                         before, after, include_consumer_health=args.include_consumer_health,
+                        include_processing=getattr(args, "include_processing", False),
                     )
                     if args.format == "markdown":
                         markdown = render_queue_comparison_markdown(comparison)

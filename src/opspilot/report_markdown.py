@@ -97,7 +97,8 @@ def _comparison_observation(observation: Mapping[str, object] | None) -> str:
     if observation is None:
         return "No observation recorded"
     details = _evidence_details({key: value for key, value in observation.items() if value is not None})
-    return f"Outcome {_value(observation['outcome'])}, {details}"
+    outcome = f"Outcome {_value(observation['outcome'])}"
+    return f"{outcome}, {details}" if details else outcome
 
 
 def _endpoint_change_lines(changes: list[EndpointChange]) -> list[str]:
@@ -181,6 +182,19 @@ def render_queue_comparison_markdown(comparison: QueueComparison) -> str:
         lines.extend(["", "## Consumer endpoint changes", ""])
         lines.extend(_endpoint_change_lines(comparison["consumer_health_changes"]))
     lines.extend(_endpoint_issue_lines(comparison.get("unchanged_endpoint_issues", [])))
+    processing = comparison.get("message_processing")
+    if processing is not None:
+        lines.extend([
+            "",
+            "## Message processing",
+            "",
+            f"- **Message ID** {_value(processing['message_id'])}",
+            f"- **Processing source** {_value(processing['source'])}",
+            "",
+            "| Baseline | Follow-up |",
+            "| --- | --- |",
+            f"| {_comparison_observation(processing['before'])} | {_comparison_observation(processing['after'])} |",
+        ])
     return "\n".join(lines) + "\n"
 
 

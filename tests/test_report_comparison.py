@@ -179,6 +179,122 @@ def test_compare_queue_highlights_a_consumer_still_unhealthy_after_backlog_clear
     assert database.read_bytes() == original
 
 
+def test_compare_queue_shows_processing_recovery_for_one_message(
+    processing_service, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPSPILOT_RABBITMQ_USER", "fixture")
+    monkeypatch.setenv("OPSPILOT_RABBITMQ_PASSWORD", "fixture")
+    queue_metrics = {"messages_ready": 3, "messages_unacknowledged": 0, "consumers": 1}
+    record = {
+        "queue": "orders", "vhost": "/", "message_id": "msg-001",
+        "result": "failed", "attempted_at": "2026-11-20T06:00:00+00:00",
+    }
+
+    def respond(path: str) -> tuple[int, bytes]:
+        response = record if path.startswith("/processing?") else queue_metrics
+        return 200, json.dumps(response).encode()
+
+    with TemporaryDirectory(prefix="opspilot-processing-comparison-") as directory:
+        database = Path(directory) / "reports.sqlite3"
+        with processing_service(respond) as (endpoint, requests):
+            options = (
+                "--management-url", endpoint.removesuffix("/processing"), "--queue", "orders",
+                "--processing-url", endpoint, "--message-id", "msg-001",
+            )
+            baseline = _compare(database, "diagnose", *options, "Check message failure")
+            assert baseline.returncode == 0, baseline.stderr
+            before = json.loads(baseline.stdout)
+            queue_metrics["messages_ready"] = 0
+            record.update(result="succeeded", attempted_at="2026-11-20T06:01:00+00:00")
+            followup = _compare(database, "diagnose", *options, "Check message retry")
+            assert followup.returncode == 0, followup.stderr
+            after = json.loads(followup.stdout)
+
+        processing_path = "/processing?queue=orders&vhost=%2F&message_id=msg-001"
+        assert requests.count(processing_path) == 2
+        compare_args = (before["task_id"], after["task_id"], "--include-processing")
+        original = database.read_bytes()
+        result = _compare(database, "compare-queue", *compare_args)
+        assert result.returncode == 0, result.stderr
+        comparison = json.loads(result.stdout)
+        assert comparison["changes"] == [{"field": "queue.pending_messages", "before": 3, "after": 0}]
+        processing = comparison["message_processing"]
+        assert processing["message_id"] == "msg-001"
+        assert processing["source"] == endpoint.removesuffix("/processing") + processing_path
+        assert processing["before"]["result"] == "failed"
+        assert processing["before"]["attempted_at"] == "2026-11-20T06:00:00+00:00"
+        assert processing["after"]["result"] == "succeeded"
+        assert processing["after"]["attempted_at"] == "2026-11-20T06:01:00+00:00"
+
+        markdown = _compare(database, "compare-queue", *compare_args, "--format", "markdown")
+        assert markdown.returncode == 0, markdown.stderr
+        assert "## Message processing" in markdown.stdout
+        assert "Processing result failed, Attempted at 2026-11-20T06:00:00+00:00" in markdown.stdout
+        assert "Processing result succeeded, Attempted at 2026-11-20T06:01:00+00:00" in markdown.stdout
+        assert database.read_bytes() == original
+
+
+@pytest.fixture
+def message_observations(saved_queue_pair) -> tuple[StoredReport, StoredReport]:
+    _, before, after = saved_queue_pair
+    observation = {
+        "tool": "inspect_processing", "source": "file:///fixtures/processing.json",
+        "observed_at": "2026-11-20T06:00:00+00:00",
+    }
+    before["requested_message_id"] = after["requested_message_id"] = "msg-001"
+    before["evidence"].append({
+        **observation, "outcome": "observed", "row_count": 0, "reason": "message_not_found",
+    })
+    after["evidence"].append({
+        **observation, "outcome": "timeout", "reason": "request_timeout",
+    })
+    return before, after
+
+
+def test_compare_queue_distinguishes_zero_matches_from_processing_timeout(message_observations) -> None:
+    before, after = message_observations
+
+    assert "message_processing" not in compare_queue_reports(before, after)
+    comparison = compare_queue_reports(before, after, include_processing=True)
+
+    processing = comparison["message_processing"]
+    assert processing["before"] == {
+        "outcome": "observed", "result": None, "row_count": 0, "attempted_at": None,
+        "http_status": None, "reason": "message_not_found",
+    }
+    assert processing["after"] == {
+        "outcome": "timeout", "result": None, "row_count": None, "attempted_at": None,
+        "http_status": None, "reason": "request_timeout",
+    }
+    markdown = render_queue_comparison_markdown(comparison)
+    assert "| Outcome observed, Matching rows 0, Reason message\\_not\\_found |" in markdown
+    assert "| Outcome timeout, Reason request\\_timeout |" in markdown
+
+
+def test_compare_queue_requires_exact_processing_scope(message_observations) -> None:
+    before, after = message_observations
+    after.pop("requested_message_id")
+    with pytest.raises(ValueError, match="same exact message ID"):
+        compare_queue_reports(before, after, include_processing=True)
+    after["requested_message_id"] = "msg-01"
+    with pytest.raises(ValueError, match="same exact message ID"):
+        compare_queue_reports(before, after, include_processing=True)
+    after["requested_message_id"] = before["requested_message_id"]
+    processing = after["evidence"].pop()
+    with pytest.raises(ValueError, match="one processing observation"):
+        compare_queue_reports(before, after, include_processing=True)
+    after["evidence"].append({**processing, "source": "file:///other/processing.json"})
+    with pytest.raises(ValueError, match="processing evidence source"):
+        compare_queue_reports(before, after, include_processing=True)
+    after["evidence"][-1] = {
+        "tool": "inspect_processing", "source": processing["source"],
+        "observed_at": processing["observed_at"], "outcome": "observed",
+        "message_id": "msg-01", "result": "succeeded",
+    }
+    with pytest.raises(ValueError, match="record does not match"):
+        compare_queue_reports(before, after, include_processing=True)
+
+
 @pytest.mark.parametrize("source", [CONSUMER_URL, CONSUMER_URL + "/replacement"])
 def test_compare_queue_matches_consumer_checks_by_source(saved_queue_pair, source: str) -> None:
     _, before, after = saved_queue_pair

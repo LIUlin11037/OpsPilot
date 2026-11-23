@@ -292,6 +292,12 @@ $queueSource = "http://127.0.0.1:15672/api/queues/%2F/orders"
 .\.venv\Scripts\python.exe -m opspilot compare-queue "BEFORE_TASK_ID" "AFTER_TASK_ID" --include-consumer-health --format markdown
 ```
 
+用 `compare-queue --include-processing` 可同时复查一条消息的处理结果。两份报告必须指定同一个 `--message-id`，并使用相同的处理记录来源。JSON 的 `message_processing` 保留两次查询的读取状态、匹配数、处理结果和尝试时间。匹配数为 `0` 表示查询成功且没有匹配记录。查询超时或数据源不可用时，匹配数为 `null`，读取状态和原因仍会显示。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot compare-queue "BEFORE_TASK_ID" "AFTER_TASK_ID" --include-processing --format markdown
+```
+
 ### 查看消费者端点健康
 
 已知消费者的 HTTP 健康端点时，可在 RabbitMQ 模式加上 `--consumer-health-url`。观察到待投递或待确认消息时，OpsPilot 发送只读 GET，记录端点健康状态、观测时间和耗时。待投递数缺失时，已观测到的待确认消息也能触发检查。健康状态说明该端点当时的响应，积压原因仍需结合队列和业务证据核查。

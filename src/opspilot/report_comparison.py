@@ -3,7 +3,13 @@
 from typing import Literal, TypedDict
 
 from opspilot.adapters.voting_snapshot import is_voting_trace
-from opspilot.core.diagnosis import DiagnosisStatus, Evidence, ObservationOutcome, TargetTraceSummary
+from opspilot.core.diagnosis import (
+    DiagnosisStatus,
+    Evidence,
+    ObservationOutcome,
+    ProcessingResult,
+    TargetTraceSummary,
+)
 from opspilot.task_store import StoredReport
 
 ComparisonValue = str | int | None
@@ -78,6 +84,22 @@ class EndpointIssue(TypedDict):
     observation: EndpointObservation
 
 
+class ProcessingObservation(TypedDict):
+    outcome: ObservationOutcome
+    result: ProcessingResult | None
+    row_count: int | None
+    attempted_at: str | None
+    http_status: int | None
+    reason: str | None
+
+
+class MessageProcessingComparison(TypedDict):
+    message_id: str
+    source: str
+    before: ProcessingObservation
+    after: ProcessingObservation
+
+
 class QueueComparisonFields(TypedDict):
     before_task_id: str
     after_task_id: str
@@ -88,6 +110,7 @@ class QueueComparisonFields(TypedDict):
 class QueueComparison(QueueComparisonFields, total=False):
     consumer_health_changes: list[EndpointChange]
     unchanged_endpoint_issues: list[EndpointIssue]
+    message_processing: MessageProcessingComparison
 
 
 class ServiceLogObservation(TypedDict):
@@ -238,8 +261,39 @@ def _queue_observation(report: StoredReport) -> tuple[str, dict[str, ComparisonV
     return queue["source"], values
 
 
+def _message_processing_observation(
+    report: StoredReport, message_id: str,
+) -> tuple[str, ProcessingObservation]:
+    records = [item for item in report["evidence"] if item["tool"] == "inspect_processing"]
+    if len(records) != 1:
+        raise ValueError("Both reports must contain one processing observation for the requested message.")
+    record, = records
+    if record.get("result") is not None and record.get("message_id") != message_id:
+        raise ValueError("A processing record does not match the requested message ID.")
+    return record["source"], {
+        "outcome": record["outcome"],
+        "result": record.get("result"),
+        "row_count": record.get("row_count"),
+        "attempted_at": record.get("attempted_at"),
+        "http_status": record.get("http_status"),
+        "reason": record.get("reason"),
+    }
+
+
+def _compare_message_processing(before: StoredReport, after: StoredReport) -> MessageProcessingComparison:
+    message_id = before.get("requested_message_id")
+    if not message_id or message_id != after.get("requested_message_id"):
+        raise ValueError("Both reports must request the same exact message ID with --message-id.")
+    source, previous = _message_processing_observation(before, message_id)
+    after_source, current = _message_processing_observation(after, message_id)
+    if source != after_source:
+        raise ValueError("Reports must match on the processing evidence source.")
+    return {"message_id": message_id, "source": source, "before": previous, "after": current}
+
+
 def compare_queue_reports(
     before: StoredReport, after: StoredReport, *, include_consumer_health: bool = False,
+    include_processing: bool = False,
 ) -> QueueComparison:
     source, before_values = _queue_observation(before)
     after_source, after_values = _queue_observation(after)
@@ -258,6 +312,8 @@ def compare_queue_reports(
         issues = _unchanged_endpoint_issues(before_consumers, after_consumers)
         if issues:
             comparison["unchanged_endpoint_issues"] = issues
+    if include_processing:
+        comparison["message_processing"] = _compare_message_processing(before, after)
     return comparison
 
 
