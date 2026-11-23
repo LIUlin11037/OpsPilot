@@ -121,10 +121,11 @@ def test_auto_diagnosis_tracks_each_dependency_of_a_healthy_service(processing_s
             assert "## Skipped checks" not in markdown.stdout
         else:
             assert report["skipped_checks"] == [
-                {"tool": "inspect_dependency_health", "when": "service_unhealthy_or_unknown"},
+                {"tool": "inspect_dependency_health", "when": "service_unhealthy_or_unknown", "source": source}
+                for source in dependencies
             ]
             assert "## Skipped checks" in markdown.stdout
-            assert r"| inspect\_dependency\_health | Service unhealthy or unknown |" in markdown.stdout
+            assert fr"| inspect\_dependency\_health | Service unhealthy or unknown | {base}/second |" in markdown.stdout
         condition = "Always" if force_dependencies else "Service unhealthy or unknown"
         recorded = 2 if force_dependencies else 0
         assert fr"| inspect\_dependency\_health | {base}/dependency | {condition} | 2 | {recorded} |" in markdown.stdout

@@ -519,7 +519,7 @@ def saved_health_pair() -> Iterator[tuple[Path, StoredReport, StoredReport]]:
         yield database, save_report(database, before), save_report(database, after)
 
 
-def test_compare_http_distinguishes_a_skipped_dependency_from_failed_health(saved_health_pair) -> None:
+def test_compare_http_preserves_legacy_absence_of_a_dependency_observation(saved_health_pair) -> None:
     database, before, after = saved_health_pair
     original = database.read_bytes()
     result = _compare(database, "compare-http", before["task_id"], after["task_id"])
@@ -542,6 +542,78 @@ def test_compare_http_distinguishes_a_skipped_dependency_from_failed_health(save
         ],
     }
     assert database.read_bytes() == original
+
+
+def test_compare_http_latest_shows_skipped_dependencies_after_service_recovery(processing_service) -> None:
+    service_status = 503
+
+    def respond(path: str) -> tuple[int, bytes]:
+        return (service_status if path == "/service" else 503), b""
+
+    with TemporaryDirectory(prefix="opspilot-dependency-skip-comparison-") as directory:
+        database = Path(directory) / "reports.sqlite3"
+        with processing_service(respond) as (endpoint, requests):
+            base = endpoint.removesuffix("/processing")
+            service_url = f"{base}/service"
+            dependency_url = f"{base}/dependency"
+            removed_url = f"{base}/removed"
+            options = (
+                "--service-url", service_url, "--dependency-url", dependency_url, "--dependency-url", dependency_url,
+            )
+            baseline = _compare(
+                database, "diagnose-http", *options, "--dependency-url", removed_url, "Check outage",
+            )
+            assert baseline.returncode == 0, baseline.stderr
+            service_status = 204
+            followup = _compare(database, "diagnose-http", *options, "Check recovery")
+            assert followup.returncode == 0, followup.stderr
+        assert requests == ["/service", "/dependency", "/dependency", "/removed", "/service"]
+        previous = json.loads(baseline.stdout)
+        current = json.loads(followup.stdout)
+        original = database.read_bytes()
+
+        result = _compare(database, "compare-http-latest", "--service-url", service_url)
+        assert result.returncode == 0, result.stderr
+        comparison = json.loads(result.stdout)
+        assert comparison["before_task_id"] == previous["task_id"]
+        assert comparison["after_task_id"] == current["task_id"]
+        first, second, removed = [change for change in comparison["changes"] if change["role"] == "dependency"]
+        assert [(row["source"], row["occurrence"]) for row in (first, second)] == [
+            (dependency_url, 1), (dependency_url, 2),
+        ]
+        for row in (first, second):
+            assert row["before"]["http_status"] == 503
+            assert row["after"] is None and row["after_skipped_when"] == "service_unhealthy_or_unknown"
+        assert removed["source"] == removed_url and removed["after"] is None
+        assert "after_skipped_when" not in removed
+
+        markdown = _compare(database, "compare-http-latest", "--service-url", service_url, "--format", "markdown")
+        assert markdown.returncode == 0, markdown.stderr
+        for occurrence in (1, 2):
+            assert (
+                f"| Dependency | {dependency_url} | {occurrence} | Outcome observed, Health unhealthy, "
+                "HTTP status 503 | Skipped because the condition was unmet (Service unhealthy or unknown) |"
+            ) in markdown.stdout
+        assert markdown.stdout.count("No observation recorded") == 1
+        assert database.read_bytes() == original
+
+
+def test_compare_http_uses_legacy_plan_to_locate_a_dependency_group_skip(saved_health_pair) -> None:
+    _, before, after = saved_health_pair
+    before["evidence"].append(deepcopy(before["evidence"][1]))
+    condition = "service_unhealthy_or_unknown"
+    after["skipped_checks"] = [{"tool": "inspect_dependency_health", "when": condition}]
+    plan = {"tool": "inspect_dependency_health", "when": condition, "count": 2, "sources": [REDIS_URL, REDIS_URL]}
+    after["planned_checks"] = [plan]
+
+    changes = compare_health_reports(before, after)["changes"]
+
+    assert [(row["occurrence"], row["after_skipped_when"]) for row in changes if row["role"] == "dependency"] == [
+        (1, condition), (2, condition),
+    ]
+    plan["sources"].pop()
+    changes = compare_health_reports(before, after)["changes"]
+    assert all("after_skipped_when" not in row for row in changes)
 
 
 def test_compare_http_renders_markdown_with_missing_observations(saved_health_pair) -> None:

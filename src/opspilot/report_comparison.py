@@ -1,5 +1,6 @@
 """Compare observations from saved diagnosis reports."""
 
+from collections import Counter
 from typing import Literal, TypedDict
 
 from opspilot.adapters.voting_snapshot import is_voting_trace
@@ -9,6 +10,7 @@ from opspilot.core.diagnosis import (
     Evidence,
     ObservationOutcome,
     ProcessingResult,
+    SkippedCheck,
     TargetTraceSummary,
 )
 from opspilot.task_store import StoredReport
@@ -318,7 +320,8 @@ def compare_queue_reports(
         after_consumers = _endpoint_observations(after["evidence"], _CONSUMER_HEALTH_ROLES)
         comparison["consumer_health_changes"] = _endpoint_changes(
             before_consumers, after_consumers,
-            before_skips=_consumer_endpoint_skips(before), after_skips=_consumer_endpoint_skips(after),
+            before_skips=_endpoint_skips(before, _CONSUMER_HEALTH_ROLES),
+            after_skips=_endpoint_skips(after, _CONSUMER_HEALTH_ROLES),
         )
         issues = _unchanged_endpoint_issues(before_consumers, after_consumers)
         if issues:
@@ -361,23 +364,32 @@ def _health_observations(report: StoredReport) -> tuple[str, EndpointObservation
     return services[0], observations
 
 
-def _consumer_endpoint_skips(report: StoredReport) -> EndpointSkips:
-    tool = "inspect_consumer_endpoint"
-    skipped = next((check for check in report.get("skipped_checks", []) if check["tool"] == tool), None)
-    if skipped is None:
-        return {}
-    source = skipped.get("source")
-    if source is None:
-        # Earlier automatic reports recorded the skip and its planned source separately.
-        sources = [
-            source for check in report.get("planned_checks", [])
-            if check["tool"] == tool and check["when"] == skipped["when"] and check["count"] == 1
-            for source in check.get("sources", [])
-        ]
-        if len(sources) != 1:
-            return {}
-        source, = sources
-    return {("consumer", source, 1): skipped["when"]}
+def _skipped_check_sources(report: StoredReport, skipped: SkippedCheck) -> list[str]:
+    if "source" in skipped:
+        return [skipped["source"]]
+    # Earlier automatic reports recorded a group skip and its planned sources separately.
+    plans = [
+        check for check in report.get("planned_checks", [])
+        if check["tool"] == skipped["tool"] and check["when"] == skipped["when"]
+    ]
+    if len(plans) != 1:
+        return []
+    plan, = plans
+    sources = plan.get("sources", [])
+    return sources if len(sources) == plan["count"] else []
+
+
+def _endpoint_skips(report: StoredReport, roles: dict[str, HealthRole]) -> EndpointSkips:
+    skips: EndpointSkips = {}
+    counts: Counter[tuple[HealthRole, str]] = Counter()
+    for skipped in report.get("skipped_checks", []):
+        role = roles.get(skipped["tool"])
+        if role is None:
+            continue
+        for source in _skipped_check_sources(report, skipped):
+            counts[role, source] += 1
+            skips[role, source, counts[role, source]] = skipped["when"]
+    return skips
 
 
 def _endpoint_changes(
@@ -466,7 +478,11 @@ def compare_health_reports(
         "before_status": before["status"],
         "after_status": after["status"],
         "service_url": service,
-        "changes": _endpoint_changes(before_values, after_values),
+        "changes": _endpoint_changes(
+            before_values, after_values,
+            before_skips=_endpoint_skips(before, _HTTP_HEALTH_ROLES),
+            after_skips=_endpoint_skips(after, _HTTP_HEALTH_ROLES),
+        ),
     }
     issues = _unchanged_endpoint_issues(before_values, after_values)
     if issues:

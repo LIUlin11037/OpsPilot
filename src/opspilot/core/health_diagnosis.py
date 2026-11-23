@@ -8,6 +8,7 @@ from typing import Annotated, Literal, Protocol, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from opspilot.core.diagnosis import (
+    CheckCondition,
     DiagnosisReport,
     Evidence,
     HealthEvidence,
@@ -87,7 +88,7 @@ def _after_log(
 
 
 def _write_report(
-    state: _HealthState, *, conditional_log: bool, conditional_dependencies: bool,
+    state: _HealthState, *, conditional_log: bool, conditional_dependencies: tuple[HealthTool, ...],
 ) -> _HealthState:
     service = state["service"]
     dependencies = state.get("dependencies", [])
@@ -126,13 +127,12 @@ def _write_report(
     if conditional_log and service_log is None:
         skipped.append({"tool": "inspect_service_log", "when": "service_unhealthy"})
     if conditional_dependencies and "dependencies" not in state:
-        skipped.append({
-            "tool": "inspect_dependency_health",
-            "when": (
-                "service_unhealthy_or_unknown_or_log_errors" if service_log is not None
-                else "service_unhealthy_or_unknown"
-            ),
-        })
+        condition: CheckCondition = (
+            "service_unhealthy_or_unknown_or_log_errors" if service_log is not None
+            else "service_unhealthy_or_unknown"
+        )
+        for dependency in conditional_dependencies:
+            skipped.append({"tool": "inspect_dependency_health", "when": condition, "source": dependency.endpoint})
     if skipped:
         report["skipped_checks"] = skipped
     return {"report": report}
@@ -159,7 +159,7 @@ def run_health_diagnosis(
     graph.add_node("check_service", partial(_check_service, service))
     graph.add_node("report", partial(
         _write_report, conditional_log=service_log is not None and not check_service_log,
-        conditional_dependencies=bool(dependency_tools) and not check_dependencies,
+        conditional_dependencies=() if check_dependencies else dependency_tools,
     ))
     graph.add_edge(START, "check_service")
     graph.add_edge("report", END)

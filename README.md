@@ -190,7 +190,7 @@ HTTP 和 RabbitMQ 诊断会在 `skipped_checks` 中列出因触发条件未满�
 
 Markdown 和 JSON 都显示两次报告保存的整体诊断状态。JSON 使用 `before_status` 和 `after_status` 两个字段。即使主服务恢复到 204，只要依赖检查仍有异常，复查状态就会保留 `undetermined`。
 
-Markdown 表格并排显示基准和复查观测，包括健康状态、HTTP 状态码、失败原因以及已记录的 MySQL 错误码。默认输出 JSON，`changes` 列出变化的端点观测。任一侧缺少观测时，Markdown 显示 `No observation recorded`，JSON 以 `null` 表示。相同角色和 URL 的重复检查按 `occurrence` 从 1 开始匹配。
+Markdown 表格并排显示基准和复查观测，包括健康状态、HTTP 状态码、失败原因以及已记录的 MySQL 错误码。默认输出 JSON，`changes` 列出变化的端点观测。主服务恢复后，如果报告记录了某个依赖按条件跳过，Markdown 会直接显示跳过条件，JSON 会在对应侧附上 `before_skipped_when` 或 `after_skipped_when`。任一侧缺少观测时，JSON 仍以 `null` 表示。没有观测或可核对的跳过记录时，Markdown 显示 `No observation recorded`。相同角色和 URL 的重复检查按 `occurrence` 从 1 开始匹配。
 
 如果同一端点在两份报告中有相同的异常或未知结果，对比会在 Markdown 的 `Unchanged endpoint issues` 小节和 JSON 的 `unchanged_endpoint_issues` 字段保留该端点及其观测。例如，主服务恢复到 204 后，仍可以看到在基准和复查中均超时的 Redis 依赖。
 
