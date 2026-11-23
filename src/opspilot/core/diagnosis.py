@@ -167,9 +167,13 @@ class PlannedCheck(_PlannedCheckFields, total=False):
     sources: list[str]
 
 
-class SkippedCheck(TypedDict):
+class _SkippedCheckFields(TypedDict):
     tool: ToolName
     when: CheckCondition
+
+
+class SkippedCheck(_SkippedCheckFields, total=False):
+    source: str
 
 
 class QueueTool(Protocol):
@@ -328,7 +332,7 @@ class DiagnosisState(DiagnosisInput, total=False):
     consumer: ConsumerEvidence | UnavailableEvidence
     consumer_health: HealthEvidence
     processing: ProcessingRead
-    queue_activity_checks: list[ToolName]
+    queue_activity_checks: list[SkippedCheck]
     tool_calls: Annotated[list[ToolCall], add]
     report: DiagnosisReport
 
@@ -508,9 +512,8 @@ def _write_report(state: DiagnosisState) -> dict[str, DiagnosisReport]:
     if processing is not None:
         report["evidence"].append(processing)
     called_tools = {call["tool"] for call in state["tool_calls"]}
-    skipped: list[SkippedCheck] = [
-        {"tool": tool, "when": "queue_activity"}
-        for tool in state.get("queue_activity_checks", []) if tool not in called_tools
+    skipped = [
+        check for check in state.get("queue_activity_checks", []) if check["tool"] not in called_tools
     ]
     if skipped:
         report["skipped_checks"] = skipped
@@ -580,7 +583,7 @@ def run_queue_diagnosis(
         raise ValueError("An explicit consumer health check requires a configured endpoint.")
 
     graph = _queue_graph(tool)
-    activity_checks: list[ToolName] = []
+    activity_checks: list[SkippedCheck] = []
     state: DiagnosisState = {"question": question, "queue_activity_checks": activity_checks}
     processing_step = "report"
     if processing_tool is not None:
@@ -589,7 +592,7 @@ def run_queue_diagnosis(
             state["requested_message_id"] = message_id
             inspect_processing = partial(inspect_processing, message_id=message_id)
         else:
-            activity_checks.append("inspect_processing")
+            activity_checks.append({"tool": "inspect_processing", "when": "queue_activity"})
         _add_processing_node(graph, inspect_processing)
         processing_step = "inspect_processing"
 
@@ -610,7 +613,10 @@ def run_queue_diagnosis(
         if check_consumer_health:
             inactive_step = active_step
         else:
-            activity_checks.insert(0, "inspect_consumer_endpoint")
+            activity_checks.insert(0, {
+                "tool": "inspect_consumer_endpoint", "when": "queue_activity",
+                "source": consumer_health_tool.endpoint,
+            })
 
     if active_step == inactive_step:
         graph.add_edge("inspect_queue", active_step)

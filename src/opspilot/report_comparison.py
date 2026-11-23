@@ -4,6 +4,7 @@ from typing import Literal, TypedDict
 
 from opspilot.adapters.voting_snapshot import is_voting_trace
 from opspilot.core.diagnosis import (
+    CheckCondition,
     DiagnosisStatus,
     Evidence,
     ObservationOutcome,
@@ -66,15 +67,22 @@ class EndpointObservation(EndpointObservationFields, total=False):
     mysql_error_code: int
 
 
-EndpointObservations = dict[tuple[HealthRole, str, int], EndpointObservation]
+EndpointKey = tuple[HealthRole, str, int]
+EndpointObservations = dict[EndpointKey, EndpointObservation]
+EndpointSkips = dict[EndpointKey, CheckCondition]
 
 
-class EndpointChange(TypedDict):
+class EndpointChangeFields(TypedDict):
     role: HealthRole
     source: str
     occurrence: int
     before: EndpointObservation | None
     after: EndpointObservation | None
+
+
+class EndpointChange(EndpointChangeFields, total=False):
+    before_skipped_when: CheckCondition
+    after_skipped_when: CheckCondition
 
 
 class EndpointIssue(TypedDict):
@@ -308,7 +316,10 @@ def compare_queue_reports(
     if include_consumer_health:
         before_consumers = _endpoint_observations(before["evidence"], _CONSUMER_HEALTH_ROLES)
         after_consumers = _endpoint_observations(after["evidence"], _CONSUMER_HEALTH_ROLES)
-        comparison["consumer_health_changes"] = _endpoint_changes(before_consumers, after_consumers)
+        comparison["consumer_health_changes"] = _endpoint_changes(
+            before_consumers, after_consumers,
+            before_skips=_consumer_endpoint_skips(before), after_skips=_consumer_endpoint_skips(after),
+        )
         issues = _unchanged_endpoint_issues(before_consumers, after_consumers)
         if issues:
             comparison["unchanged_endpoint_issues"] = issues
@@ -350,17 +361,50 @@ def _health_observations(report: StoredReport) -> tuple[str, EndpointObservation
     return services[0], observations
 
 
-def _endpoint_changes(before: EndpointObservations, after: EndpointObservations) -> list[EndpointChange]:
+def _consumer_endpoint_skips(report: StoredReport) -> EndpointSkips:
+    tool = "inspect_consumer_endpoint"
+    skipped = next((check for check in report.get("skipped_checks", []) if check["tool"] == tool), None)
+    if skipped is None:
+        return {}
+    source = skipped.get("source")
+    if source is None:
+        # Earlier automatic reports recorded the skip and its planned source separately.
+        sources = [
+            source for check in report.get("planned_checks", [])
+            if check["tool"] == tool and check["when"] == skipped["when"] and check["count"] == 1
+            for source in check.get("sources", [])
+        ]
+        if len(sources) != 1:
+            return {}
+        source, = sources
+    return {("consumer", source, 1): skipped["when"]}
+
+
+def _endpoint_changes(
+    before: EndpointObservations, after: EndpointObservations, *,
+    before_skips: EndpointSkips | None = None, after_skips: EndpointSkips | None = None,
+) -> list[EndpointChange]:
+    before_skips = before_skips or {}
+    after_skips = after_skips or {}
     changes: list[EndpointChange] = []
-    for role, source, occurrence in before | after:
+    keys = dict.fromkeys((*before, *after, *before_skips, *after_skips))
+    for role, source, occurrence in keys:
         key = (role, source, occurrence)
         previous = before.get(key)
         current = after.get(key)
-        if current != previous:
-            changes.append({
-                "role": role, "source": source, "occurrence": occurrence,
-                "before": previous, "after": current,
-            })
+        previous_skip = before_skips.get(key) if previous is None else None
+        current_skip = after_skips.get(key) if current is None else None
+        if (current, current_skip) == (previous, previous_skip):
+            continue
+        change: EndpointChange = {
+            "role": role, "source": source, "occurrence": occurrence,
+            "before": previous, "after": current,
+        }
+        if previous_skip is not None:
+            change["before_skipped_when"] = previous_skip
+        if current_skip is not None:
+            change["after_skipped_when"] = current_skip
+        changes.append(change)
     return changes
 
 

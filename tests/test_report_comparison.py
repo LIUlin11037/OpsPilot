@@ -84,7 +84,7 @@ def test_compare_queue_preserves_partial_observations_and_zero_counts(saved_queu
     assert database.read_bytes() == original
 
 
-def test_compare_queue_can_include_a_skipped_consumer_check(saved_queue_pair) -> None:
+def test_compare_queue_keeps_legacy_absence_of_a_consumer_observation(saved_queue_pair) -> None:
     database, before, after = saved_queue_pair
     original = database.read_bytes()
 
@@ -104,6 +104,61 @@ def test_compare_queue_can_include_a_skipped_consumer_check(saved_queue_pair) ->
         }],
     }
     assert database.read_bytes() == original
+
+
+@pytest.mark.parametrize("legacy_plan", [False, True])
+def test_compare_queue_labels_a_consumer_check_skipped_by_condition(saved_queue_pair, legacy_plan) -> None:
+    database, before, after = saved_queue_pair
+    after["skipped_checks"] = [{"tool": "inspect_consumer_endpoint", "when": "queue_activity"}]
+    if legacy_plan:
+        after["planned_checks"] = [{
+            "tool": "inspect_consumer_endpoint", "when": "queue_activity", "count": 1,
+            "sources": [CONSUMER_URL],
+        }]
+    else:
+        after["skipped_checks"][0]["source"] = CONSUMER_URL
+    after = save_report(database, after)
+    original = database.read_bytes()
+
+    args = (before["task_id"], after["task_id"], "--include-consumer-health")
+    result = _compare(database, "compare-queue", *args)
+    assert result.returncode == 0, result.stderr
+    change, = json.loads(result.stdout)["consumer_health_changes"]
+    assert change["source"] == CONSUMER_URL
+    assert change["before"]["http_status"] == 503
+    assert change["after"] is None and change["after_skipped_when"] == "queue_activity"
+    assert "before_skipped_when" not in change
+
+    markdown = _compare(database, "compare-queue", *args, "--format", "markdown")
+    assert markdown.returncode == 0, markdown.stderr
+    assert (
+        f"| Consumer | {CONSUMER_URL} | 1 | Outcome observed, Health unhealthy, HTTP status 503 "
+        "| Skipped because the condition was unmet (Pending or unacknowledged messages observed) |"
+    ) in markdown.stdout
+    assert database.read_bytes() == original
+
+    reverse = compare_queue_reports(after, before, include_consumer_health=True)
+    change, = reverse["consumer_health_changes"]
+    assert change["before"] is None and change["before_skipped_when"] == "queue_activity"
+    assert change["after"]["http_status"] == 503
+    assert compare_queue_reports(after, after, include_consumer_health=True)["consumer_health_changes"] == []
+
+
+def test_compare_queue_matches_a_consumer_skip_to_its_own_source(saved_queue_pair) -> None:
+    _, before, after = saved_queue_pair
+    other_url = CONSUMER_URL + "/elsewhere"
+    after["skipped_checks"] = [{
+        "tool": "inspect_consumer_endpoint", "when": "queue_activity", "source": other_url,
+    }]
+
+    changes = compare_queue_reports(before, after, include_consumer_health=True)["consumer_health_changes"]
+
+    original, replaced = changes
+    assert original["source"] == CONSUMER_URL and original["after"] is None
+    assert "after_skipped_when" not in original
+    assert replaced["source"] == other_url
+    assert replaced["before"] is None and replaced["after"] is None
+    assert replaced["after_skipped_when"] == "queue_activity"
 
 
 @pytest.mark.parametrize("include_consumer_health", [False, True])

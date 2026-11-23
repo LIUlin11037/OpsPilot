@@ -5,7 +5,7 @@ from collections import Counter
 from collections.abc import Mapping
 from html import escape
 
-from opspilot.core.diagnosis import PlannedCheck, ToolCall
+from opspilot.core.diagnosis import CheckCondition, PlannedCheck, ToolCall
 from opspilot.report_comparison import (
     EndpointChange,
     EndpointIssue,
@@ -96,8 +96,13 @@ def _evidence_details(item: Mapping[str, object]) -> str:
     )
 
 
-def _comparison_observation(observation: Mapping[str, object] | None) -> str:
+def _comparison_observation(
+    observation: Mapping[str, object] | None, skipped_when: CheckCondition | None = None,
+) -> str:
     if observation is None:
+        if skipped_when is not None:
+            condition = _value(_PLAN_CONDITIONS.get(skipped_when, skipped_when))
+            return f"Skipped because the condition was unmet ({condition})"
         return "No observation recorded"
     details = _evidence_details({key: value for key, value in observation.items() if value is not None})
     outcome = f"Outcome {_value(observation['outcome'])}"
@@ -112,10 +117,11 @@ def _endpoint_change_lines(changes: list[EndpointChange]) -> list[str]:
         "| --- | --- | ---: | --- | --- |",
     ]
     for change in changes:
+        before = _comparison_observation(change["before"], change.get("before_skipped_when"))
+        after = _comparison_observation(change["after"], change.get("after_skipped_when"))
         lines.append(
             f"| {change['role'].capitalize()} | {_value(change['source'])} | "
-            f"{change['occurrence']} | {_comparison_observation(change['before'])} | "
-            f"{_comparison_observation(change['after'])} |"
+            f"{change['occurrence']} | {before} | {after} |"
         )
     return lines
 

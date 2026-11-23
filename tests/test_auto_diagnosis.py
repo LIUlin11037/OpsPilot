@@ -493,7 +493,10 @@ def test_target_queue_checks_follow_each_configured_condition(
             expected_tools.append("inspect_consumer_endpoint")
             assert report["evidence"][1]["health"] == "unhealthy"
         else:
-            expected_skips.insert(0, {"tool": "inspect_consumer_endpoint", "when": "queue_activity"})
+            expected_skips.insert(0, {
+                "tool": "inspect_consumer_endpoint", "when": "queue_activity",
+                "source": f"{base}/consumer-health",
+            })
         assert report["skipped_checks"] == expected_skips
         assert "## Skipped checks" in markdown.stdout
         assert r"| inspect\_processing | Pending or unacknowledged messages observed |" in markdown.stdout

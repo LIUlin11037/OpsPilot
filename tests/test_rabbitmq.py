@@ -416,7 +416,12 @@ def test_rabbitmq_diagnosis_checks_consumer_on_activity_or_explicit_recheck(
         "no_backlog_observed" if pending == 0 and broker_status == 200 else "undetermined"
     )
     expected_tools = ["inspect_queue"]
-    if health is not None:
+    if health is None:
+        assert report["skipped_checks"] == [{
+            "tool": "inspect_consumer_endpoint", "when": "queue_activity", "source": health_url,
+        }]
+    else:
+        assert "skipped_checks" not in report
         expected_tools.append("inspect_consumer_endpoint")
         endpoint = report["evidence"][1]
         assert endpoint["source"] == health_url
