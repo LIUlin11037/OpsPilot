@@ -107,6 +107,7 @@ def test_markdown_supports_reports_saved_before_tool_call_sources(report_db: Pat
     }
     if with_tool_call:
         early_report["tool_calls"] = [{"tool": "inspect_queue", "outcome": "timeout", "duration_ms": 12.0}]
+        early_report["planned_checks"] = [{"tool": "inspect_queue", "when": "always", "count": 1}]
     stored = save_report(report_db, early_report)
 
     output = _read_report(report_db, stored["task_id"], "--format", "markdown")
@@ -114,6 +115,8 @@ def test_markdown_supports_reports_saved_before_tool_call_sources(report_db: Pat
     assert early_report["conclusion"] in output
     assert r"| inspect\_queue | timeout |  |  | legacy\|source | 2026-11-19T06:00:00+00:00 |" in output
     if with_tool_call:
+        assert "| Tool | When | Configured calls | Recorded calls |" in output
+        assert r"| inspect\_queue | Always | 1 | 1 |" in output
         assert "| Tool | Outcome | Duration (ms) |" in output
         assert r"| inspect\_queue | timeout | 12.000 |" in output
     else:

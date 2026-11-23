@@ -87,7 +87,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m opspilot diagnose-auto --config .\target.json --plan "RabbitMQ 队列积压"
 ```
 
-正式诊断会把计划中的目标范围和检查写入报告的 `planned_scope` 与 `planned_checks`。用 `report TASK_ID --format markdown` 回看时，可以看到本次计划检查的目标，并对照配置的调用次数与实际记录的调用次数。实际调用即使超时或返回不可用，也计入记录，具体结果见 `tool_calls`。
+正式诊断会把计划中的目标范围和检查写入报告的 `planned_scope` 与 `planned_checks`。HTTP 和队列流程的计划会列出每项检查配置的 `sources`。用 `report TASK_ID --format markdown` 回看时，可以按来源对照配置次数和实际调用次数。实际调用即使超时或返回不可用，也计入记录，具体结果见 `tool_calls`。
 
 ### 本地故障与恢复演示
 

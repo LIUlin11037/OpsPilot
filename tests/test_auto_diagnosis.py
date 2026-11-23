@@ -82,31 +82,45 @@ def test_auto_diagnosis_runs_and_saves_the_selected_workflow(
         assert f"**Matched terms** {', '.join(terms)}" in markdown.stdout
 
 
-def test_auto_diagnosis_checks_dependencies_of_a_healthy_service(processing_service) -> None:
+@pytest.mark.parametrize("force_dependencies", [False, True])
+def test_auto_diagnosis_tracks_each_dependency_of_a_healthy_service(processing_service, force_dependencies) -> None:
     with TemporaryDirectory(prefix="opspilot-auto-recheck-") as directory:
         config = Path(directory) / "health.json"
-        with processing_service(lambda path: (204 if path == "/health" else 503, b"")) as (endpoint, requests):
+        with processing_service(lambda path: (503 if path == "/dependency" else 204, b"")) as (endpoint, requests):
             base = endpoint.removesuffix("/processing")
+            dependencies = [f"{base}/dependency", f"{base}/dependency", f"{base}/second"]
             config.write_text(json.dumps({
-                "service_url": f"{base}/health", "dependency_urls": [f"{base}/dependency"],
+                "service_url": f"{base}/health", "dependency_urls": dependencies,
             }), encoding="utf-8")
-            options = ("diagnose-auto", "--health-config", str(config), "--check-dependencies", "Check HTTP health")
+            options = ["diagnose-auto", "--health-config", str(config), "Check HTTP health"]
+            if force_dependencies:
+                options.append("--check-dependencies")
             preview = _cli(directory, *options, "--plan")
             assert preview.returncode == 0, preview.stderr
             checks = json.loads(preview.stdout)["checks"]
             assert checks == [
-                {"tool": "inspect_service_health", "when": "always", "count": 1},
-                {"tool": "inspect_dependency_health", "when": "always", "count": 1},
+                {"tool": "inspect_service_health", "when": "always", "count": 1, "sources": [f"{base}/health"]},
+                {
+                    "tool": "inspect_dependency_health", "sources": dependencies, "count": 3,
+                    "when": "always" if force_dependencies else "service_unhealthy_or_unknown",
+                },
             ]
             assert requests == []
             result = _cli(directory, *options)
 
         assert result.returncode == 0, result.stderr
-        assert requests == ["/health", "/dependency"]
+        assert requests == (["/health", "/dependency", "/dependency", "/second"] if force_dependencies else ["/health"])
         report = json.loads(result.stdout)
-        assert report["status"] == "undetermined"
+        assert report["status"] == ("undetermined" if force_dependencies else "no_failure_observed")
         assert report["planned_checks"] == checks
-        assert [item["http_status"] for item in report["evidence"]] == [204, 503]
+        assert [item["http_status"] for item in report["evidence"]] == ([204, 503, 503, 204] if force_dependencies else [204])
+        markdown = _cli(directory, "report", report["task_id"], "--format", "markdown")
+        assert markdown.returncode == 0, markdown.stderr
+        condition = "Always" if force_dependencies else "Service unhealthy or unknown"
+        recorded = 2 if force_dependencies else 0
+        assert fr"| inspect\_dependency\_health | {base}/dependency | {condition} | 2 | {recorded} |" in markdown.stdout
+        recorded = 1 if force_dependencies else 0
+        assert fr"| inspect\_dependency\_health | {base}/second | {condition} | 1 | {recorded} |" in markdown.stdout
 
 
 @pytest.mark.parametrize(
@@ -273,6 +287,7 @@ def test_auto_plan_previews_checks_without_running_or_saving_a_diagnosis(
             assert plan["routing"]["selected_by"] == options[0].removeprefix("--").replace("-", "_")
         if workflow == "http_health":
             source = {"service_url": f"{base}/health"}
+            assert plan["checks"][1]["sources"] == [f"{base}/dependency", "mysql://localhost:3306"]
         elif workflow == "queue":
             source = {"queue_source": f"{base}/api/queues/staging/orders"}
         else:
@@ -283,17 +298,28 @@ def test_auto_plan_previews_checks_without_running_or_saving_a_diagnosis(
         assert not database.exists()
 
 
-@pytest.mark.parametrize(("section", "question"), [("health", "HTTP health"), ("rabbitmq", "Queue backlog")])
-def test_auto_plan_rejects_embedded_credentials_before_showing_scope(section, question) -> None:
+@pytest.mark.parametrize("endpoint_kind", ["service", "queue", "mysql"])
+def test_auto_plan_rejects_embedded_credentials_before_showing_sources(endpoint_kind) -> None:
     url = "http://admin:fixture-secret@127.0.0.1:8000"
-    settings = {"service_url": url} if section == "health" else {"management_url": url, "queue": "orders"}
+    expected_error = "without credentials"
+    question = "HTTP health"
+    if endpoint_kind == "queue":
+        config_data = {"rabbitmq": {"management_url": url, "queue": "orders"}}
+        question = "Queue backlog"
+    elif endpoint_kind == "mysql":
+        config_data = {"health": {
+            "service_url": "http://127.0.0.1/health", "mysql_dependency_urls": [url.replace("http:", "mysql:")],
+        }}
+        expected_error = "Use a MySQL health URL"
+    else:
+        config_data = {"health": {"service_url": url}}
     with TemporaryDirectory(prefix="opspilot-auto-plan-url-") as directory:
         config = Path(directory) / "target.json"
-        config.write_text(json.dumps({section: settings}), encoding="utf-8")
+        config.write_text(json.dumps(config_data), encoding="utf-8")
         result = _cli(directory, "diagnose-auto", "--config", str(config), "--plan", question)
         assert result.returncode == 2
         assert result.stdout == ""
-        assert "without credentials" in result.stderr
+        assert expected_error in result.stderr
         assert "fixture-secret" not in result.stderr
         assert not (Path(directory) / ".opspilot").exists()
 
@@ -348,17 +374,22 @@ def test_target_queue_uses_configured_checks_only_when_queue_activity_is_observe
 
     assert markdown.returncode == 0, markdown.stderr
     assert report["routing"]["workflow"] == "queue"
+    record_source = f"{endpoint}?queue=orders&vhost=staging" if processing_source == "processing_url" else record_path.as_uri()
     assert report["planned_checks"] == [
-        {"tool": "inspect_queue", "when": "always", "count": 1},
-        {"tool": "inspect_consumer_endpoint", "when": "queue_activity", "count": 1},
-        {"tool": "inspect_processing", "when": "queue_activity", "count": 1},
+        {"tool": "inspect_queue", "when": "always", "count": 1, "sources": [base + queue_path]},
+        {"tool": "inspect_consumer_endpoint", "when": "queue_activity", "count": 1, "sources": [f"{base}/consumer-health"]},
+        {"tool": "inspect_processing", "when": "queue_activity", "count": 1, "sources": [record_source]},
     ]
     expected_calls = 0 if pending == 0 and unacknowledged == 0 else 1
     assert "## Planned checks" in markdown.stdout
-    assert r"| inspect\_queue | Always | 1 | 1 |" in markdown.stdout
+    assert fr"| inspect\_queue | {base}{queue_path} | Always | 1 | 1 |" in markdown.stdout
     for tool in ("inspect_consumer_endpoint", "inspect_processing"):
         label = tool.replace("_", "\\_")
-        assert f"| {label} | Pending or unacknowledged messages observed | 1 | {expected_calls} |" in markdown.stdout
+        assert any(
+            line.startswith(f"| {label} | ")
+            and line.endswith(f" | Pending or unacknowledged messages observed | 1 | {expected_calls} |")
+            for line in markdown.stdout.splitlines()
+        )
     if pending == 0 and unacknowledged == 0:
         assert requests == [queue_path]
         assert [call["tool"] for call in report["tool_calls"]] == ["inspect_queue"]
@@ -430,10 +461,10 @@ def test_auto_diagnosis_can_lookup_exact_message_independently_of_queue_activity
         report = json.loads(result.stdout)
         assert report["routing"] == {"workflow": "queue", "matched_terms": [], "selected_by": selection_basis}
         assert report["requested_message_id"] == message_id
-        assert report["planned_checks"][-1] == {
-            "tool": "inspect_processing", "when": "always", "count": 1,
-        }
         queue, processing = report["evidence"]
+        assert report["planned_checks"][-1] == {
+            "tool": "inspect_processing", "when": "always", "count": 1, "sources": [processing["source"]],
+        }
         assert queue["outcome"] == ("observed" if queue_status == 200 else "missing")
         assert processing["message_id"] == message_id and processing["result"] == "failed"
         queue_request, processing_request = requests

@@ -19,7 +19,7 @@ from opspilot.adapters.simulated import SimulatedProcessingAdapter
 from opspilot.adapters.voting_snapshot import VotingSnapshotAdapter, parse_voter_id
 from opspilot.connectors.http_health import HttpHealthConnector
 from opspilot.connectors.jsonl_service_log import JsonlServiceLogConnector
-from opspilot.connectors.mysql import MySQLConnector, MySQLHealthConnector
+from opspilot.connectors.mysql import MySQLConnector, MySQLHealthConnector, mysql_health_endpoint
 from opspilot.connectors.rabbitmq import RabbitMQQueueConnector, queue_endpoint
 from opspilot.connectors.redis_health import RedisHealthConnector
 from opspilot.connectors.simulated import SimulatedQueueConnector
@@ -356,27 +356,36 @@ def _prepare_auto_diagnosis(
             )
         if args.check_service_log and config.service_log_path is None:
             raise ValueError(_LOG_CONFIG_REQUIRED)
-        checks: list[PlannedCheck] = [{"tool": "inspect_service_health", "when": "always", "count": 1}]
+        service = HttpHealthConnector(config.service_url, config.timeout_seconds)
+        checks: list[PlannedCheck] = [{
+            "tool": "inspect_service_health", "when": "always", "count": 1, "sources": [service.endpoint],
+        }]
         if config.service_log_path is not None:
             checks.append({
                 "tool": "inspect_service_log",
                 "when": "always" if args.check_service_log else "service_unhealthy",
                 "count": 1,
+                "sources": [config.service_log_path.absolute().as_uri()],
             })
-        dependency_count = (
-            len(config.dependency_urls) + len(config.redis_dependency_urls) + len(config.mysql_dependency_urls)
+        dependency_sources = [
+            HttpHealthConnector(url, config.timeout_seconds).endpoint for url in config.dependency_urls
+        ]
+        dependency_sources.extend(
+            RedisHealthConnector(url, config.timeout_seconds).endpoint for url in config.redis_dependency_urls
         )
-        if dependency_count:
+        for url in config.mysql_dependency_urls:
+            mysql_health_endpoint(url)
+            dependency_sources.append(url)
+        if dependency_sources:
             dependency_check: PlannedCheck = {
                 "tool": "inspect_dependency_health", "when": "service_unhealthy_or_unknown",
-                "count": dependency_count,
+                "count": len(dependency_sources), "sources": dependency_sources,
             }
             if args.check_dependencies:
                 dependency_check["when"] = "always"
             elif args.check_service_log:
                 dependency_check["when"] = "service_unhealthy_or_unknown_or_log_errors"
             checks.append(dependency_check)
-        service = HttpHealthConnector(config.service_url, config.timeout_seconds)
         plan = {"question": question, "routing": routing, "scope": {"service_url": service.endpoint}, "checks": checks}
         return plan, partial(
             _run_configured_health, question, config,
@@ -400,13 +409,25 @@ def _prepare_auto_diagnosis(
     scope: dict[str, str | int] = {"queue": rabbitmq.queue, "vhost": rabbitmq.vhost, "queue_source": endpoint.geturl()}
     if message_id is not None:
         scope["message_id"] = message_id
-    checks = [{"tool": "inspect_queue", "when": "always", "count": 1}]
+    checks = [{"tool": "inspect_queue", "when": "always", "count": 1, "sources": [endpoint.geturl()]}]
     if rabbitmq.consumer_health_url is not None:
-        checks.append({"tool": "inspect_consumer_endpoint", "when": "queue_activity", "count": 1})
-    if has_processing_source:
+        consumer = HttpHealthConnector(rabbitmq.consumer_health_url, rabbitmq.timeout_seconds)
+        checks.append({
+            "tool": "inspect_consumer_endpoint", "when": "queue_activity", "count": 1,
+            "sources": [consumer.endpoint],
+        })
+    processing_source = None
+    if rabbitmq.processing_record is not None:
+        processing_source = rabbitmq.processing_record.absolute().as_uri()
+    elif rabbitmq.processing_url is not None:
+        processing = HttpProcessingAdapter(
+            rabbitmq.processing_url, rabbitmq.queue, rabbitmq.vhost, rabbitmq.timeout_seconds,
+        )
+        processing_source = processing.request_url(message_id=message_id).geturl()
+    if processing_source is not None:
         checks.append({
             "tool": "inspect_processing", "when": "always" if message_id is not None else "queue_activity",
-            "count": 1,
+            "count": 1, "sources": [processing_source],
         })
 
     def diagnose_queue() -> DiagnosisReport:

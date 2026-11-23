@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from math import ceil, isfinite
 from typing import Any, Literal
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 from opspilot.core.diagnosis import HealthRead, ObservationOutcome
 
@@ -89,6 +89,20 @@ class MySQLConnector:
         return MySQLRead("observed", timestamp(), rows)
 
 
+def mysql_health_endpoint(endpoint: str) -> SplitResult:
+    url = urlsplit(endpoint)
+    if (
+        url.scheme != "mysql"
+        or not url.hostname
+        or url.username is not None
+        or url.path not in ("", "/")
+        or url.query
+        or url.fragment
+    ):
+        raise ValueError("Use a MySQL health URL in the form mysql://HOST[:PORT].")
+    return url
+
+
 @dataclass(frozen=True)
 class MySQLHealthConnector:
     endpoint: str
@@ -98,16 +112,7 @@ class MySQLHealthConnector:
     _mysql: MySQLConnector = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        url = urlsplit(self.endpoint)
-        if (
-            url.scheme != "mysql"
-            or not url.hostname
-            or url.username is not None
-            or url.path not in ("", "/")
-            or url.query
-            or url.fragment
-        ):
-            raise ValueError("Use a MySQL health URL in the form mysql://HOST[:PORT].")
+        url = mysql_health_endpoint(self.endpoint)
         port = 3306 if url.port is None else url.port
         object.__setattr__(
             self, "_mysql",

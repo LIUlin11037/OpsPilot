@@ -5,7 +5,7 @@ from contextlib import closing
 from dataclasses import dataclass, field
 from http.client import HTTPConnection, HTTPException, HTTPSConnection
 from math import isfinite
-from urllib.parse import SplitResult, urlencode, urlsplit, urlunsplit
+from urllib.parse import SplitResult, urlencode, urlsplit
 
 from opspilot.adapters.processing_records import (
     ProcessingFailure,
@@ -48,22 +48,23 @@ class HttpProcessingAdapter:
             raise ValueError("Timeout must be a finite positive number.")
         object.__setattr__(self, "_url", url)
 
-    def inspect_processing(
-        self, *, message_id: str | None = None
-    ) -> ProcessingRecordEvidence | EmptyProcessingEvidence | UnavailableProcessingEvidence:
+    def request_url(self, *, message_id: str | None = None) -> SplitResult:
         parameters = {"queue": self.queue, "vhost": self.vhost}
         if message_id is not None:
             parameters["message_id"] = message_id
-        query = urlencode(parameters)
-        url = self._url
-        path = url.path or "/"
-        source = urlunsplit((url.scheme, url.netloc, path, query, ""))
+        return self._url._replace(path=self._url.path or "/", query=urlencode(parameters))
+
+    def inspect_processing(
+        self, *, message_id: str | None = None
+    ) -> ProcessingRecordEvidence | EmptyProcessingEvidence | UnavailableProcessingEvidence:
+        url = self.request_url(message_id=message_id)
+        source = url.geturl()
         connection_type = HTTPSConnection if url.scheme == "https" else HTTPConnection
         connection = connection_type(url.hostname, url.port, timeout=self.timeout_seconds)
 
         try:
             with closing(connection):
-                connection.request("GET", f"{path}?{query}", headers={"Accept": "application/json"})
+                connection.request("GET", f"{url.path}?{url.query}", headers={"Accept": "application/json"})
                 with connection.getresponse() as response:
                     status = response.status
                     if status == 404:

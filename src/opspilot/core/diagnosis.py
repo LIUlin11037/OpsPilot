@@ -151,13 +151,17 @@ class ToolCall(_ToolCallFields, total=False):
     source: str
 
 
-class PlannedCheck(TypedDict):
+class _PlannedCheckFields(TypedDict):
     tool: ToolName
     when: Literal[
         "always", "service_unhealthy", "service_unhealthy_or_unknown",
         "service_unhealthy_or_unknown_or_log_errors", "queue_activity",
     ]
     count: int
+
+
+class PlannedCheck(_PlannedCheckFields, total=False):
+    sources: list[str]
 
 
 class QueueTool(Protocol):

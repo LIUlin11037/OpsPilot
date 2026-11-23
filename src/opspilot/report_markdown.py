@@ -5,6 +5,7 @@ from collections import Counter
 from collections.abc import Mapping
 from html import escape
 
+from opspilot.core.diagnosis import PlannedCheck, ToolCall
 from opspilot.report_comparison import (
     EndpointChange,
     HealthComparison,
@@ -203,6 +204,33 @@ def render_health_comparison_markdown(comparison: HealthComparison) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _planned_check_lines(checks: list[PlannedCheck], calls: list[ToolCall] | None) -> list[str]:
+    has_sources = any(check.get("sources") for check in checks)
+    source_header = "Source | " if has_sources else ""
+    source_separator = "--- | " if has_sources else ""
+    lines = [
+        "", "## Planned checks", "",
+        f"| Tool | {source_header}When | Configured calls | Recorded calls |",
+        f"| --- | {source_separator}--- | ---: | ---: |",
+    ]
+    recorded_counts = Counter(call["tool"] for call in calls or ())
+    recorded_sources = Counter((call["tool"], call["source"]) for call in calls or () if "source" in call)
+    unscoped_tools = {call["tool"] for call in calls or () if "source" not in call}
+    for check in checks:
+        tool = check["tool"]
+        condition = _value(_PLAN_CONDITIONS.get(check["when"], check["when"]))
+        sources = check.get("sources")
+        if sources:
+            for source, count in Counter(sources).items():
+                recorded = recorded_sources[tool, source] if calls is not None and tool not in unscoped_tools else None
+                lines.append(f"| {_value(tool)} | {_value(source)} | {condition} | {count} | {_value(recorded)} |")
+        else:
+            source_cell = " | " if has_sources else ""
+            recorded = recorded_counts[tool] if calls is not None else None
+            lines.append(f"| {_value(tool)} | {source_cell}{condition} | {check['count']} | {_value(recorded)} |")
+    return lines
+
+
 def render_markdown(report: StoredReport) -> str:
     lines = [
         "# OpsPilot diagnosis report",
@@ -281,19 +309,7 @@ def render_markdown(report: StoredReport) -> str:
 
     calls = report.get("tool_calls")
     if report.get("planned_checks"):
-        lines.extend([
-            "", "## Planned checks", "",
-            "| Tool | When | Configured calls | Recorded calls |",
-            "| --- | --- | ---: | ---: |",
-        ])
-        recorded_counts = Counter(call["tool"] for call in calls) if calls is not None else None
-        for check in report["planned_checks"]:
-            tool = check["tool"]
-            condition = _PLAN_CONDITIONS.get(check["when"], check["when"])
-            recorded = recorded_counts[tool] if recorded_counts is not None else None
-            lines.append(
-                f"| {_value(tool)} | {_value(condition)} | {check['count']} | {_value(recorded)} |"
-            )
+        lines.extend(_planned_check_lines(report["planned_checks"], calls))
 
     if calls:
         has_sources = any("source" in call for call in calls)

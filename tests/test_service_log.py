@@ -139,6 +139,7 @@ def test_http_cli_uses_the_configured_log_on_failure_or_explicit_recheck(
         if automatic:
             assert report["planned_checks"][1] == {
                 "tool": "inspect_service_log", "when": "always" if log_flag else "service_unhealthy", "count": 1,
+                "sources": [log.as_uri()],
             }
             if log_flag:
                 assert report["planned_checks"] == planned_checks
