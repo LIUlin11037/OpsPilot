@@ -51,6 +51,7 @@ from opspilot.task_store import StoredReport, list_reports, load_report, save_re
 
 
 _LOG_CONFIG_REQUIRED = "--check-service-log requires service_log_path in the health configuration"
+_CONSUMER_HEALTH_WORKFLOW_REQUIRED = "--check-consumer-health requires the RabbitMQ queue workflow"
 _VOTER_ID_ERROR = "--voter-id must contain 1 to 255 hexadecimal digits"
 
 
@@ -119,6 +120,7 @@ def _run_configured_queue(
     processing_url: str | None = None,
     processing_record: Path | None = None,
     message_id: str | None = None,
+    check_consumer_health: bool = False,
 ) -> DiagnosisReport:
     processing_tool: TargetProcessingTool | None = None
     if processing_record is not None:
@@ -138,7 +140,7 @@ def _run_configured_queue(
     )
     return run_queue_diagnosis(
         question, connector, processing_tool, message_id=message_id,
-        consumer_health_tool=consumer_health_tool,
+        consumer_health_tool=consumer_health_tool, check_consumer_health=check_consumer_health,
     )
 
 
@@ -314,6 +316,8 @@ def _prepare_auto_diagnosis(
     if args.delivery_id is not None or voter_id is not None:
         if health_option is not None:
             raise ValueError(f"{health_option} requires the HTTP health workflow")
+        if args.check_consumer_health:
+            raise ValueError(_CONSUMER_HEALTH_WORKFLOW_REQUIRED)
         target = load_target_config(args.config)
         selected_by: Literal["delivery_id", "voter_id"]
         if voter_id is not None:
@@ -345,6 +349,8 @@ def _prepare_auto_diagnosis(
     )
     if health_option is not None and routing["workflow"] != "http_health":
         raise ValueError(f"{health_option} requires the HTTP health workflow")
+    if args.check_consumer_health and routing["workflow"] != "queue":
+        raise ValueError(_CONSUMER_HEALTH_WORKFLOW_REQUIRED)
     target = load_target_config(args.config) if args.config is not None else None
     if routing["workflow"] == "http_health":
         config = target.health if target is not None else None
@@ -399,6 +405,8 @@ def _prepare_auto_diagnosis(
         raise ValueError(
             "Queue symptoms matched. Supply --management-url and --queue or a rabbitmq section in --config."
         )
+    if args.check_consumer_health and rabbitmq.consumer_health_url is None:
+        raise ValueError("--check-consumer-health requires rabbitmq.consumer_health_url in --config")
 
     has_processing_source = rabbitmq.processing_url is not None or rabbitmq.processing_record is not None
     message_id = args.message_id
@@ -413,7 +421,8 @@ def _prepare_auto_diagnosis(
     if rabbitmq.consumer_health_url is not None:
         consumer = HttpHealthConnector(rabbitmq.consumer_health_url, rabbitmq.timeout_seconds)
         checks.append({
-            "tool": "inspect_consumer_endpoint", "when": "queue_activity", "count": 1,
+            "tool": "inspect_consumer_endpoint", "count": 1,
+            "when": "always" if args.check_consumer_health else "queue_activity",
             "sources": [consumer.endpoint],
         })
     processing_source = None
@@ -437,6 +446,7 @@ def _prepare_auto_diagnosis(
             processing_url=rabbitmq.processing_url,
             processing_record=rabbitmq.processing_record,
             message_id=message_id,
+            check_consumer_health=args.check_consumer_health,
         )
 
     return {"question": question, "routing": routing, "scope": scope, "checks": checks}, diagnose_queue
@@ -540,6 +550,11 @@ def main() -> None:
         health_parser.add_argument(
             "--check-service-log", action="store_true",
             help="Check the configured service log regardless of HTTP health.",
+        )
+    for queue_parser in (diagnose, auto_diagnose):
+        queue_parser.add_argument(
+            "--check-consumer-health", action="store_true",
+            help="Check the configured consumer endpoint regardless of queue activity.",
         )
     voting = commands.add_parser("diagnose-voting", help="Trace a voter in an Example Voting App evidence export.")
     voting.add_argument("--snapshot", type=Path, required=True, help="Local voting evidence snapshot.")
@@ -777,6 +792,8 @@ def main() -> None:
             )
             if args.message_id is not None and not has_processing_source:
                 diagnose.error("--message-id requires --processing-record or --processing-url")
+            if args.check_consumer_health and args.consumer_health_url is None:
+                diagnose.error("--check-consumer-health requires --consumer-health-url")
             if args.management_url is not None:
                 queue_tool = _rabbitmq_connector(args, diagnose)
                 try:
@@ -785,6 +802,7 @@ def main() -> None:
                         consumer_health_url=args.consumer_health_url,
                         processing_url=args.processing_url,
                         processing_record=args.processing_record,
+                        check_consumer_health=args.check_consumer_health,
                     )
                 except ValueError as error:
                     diagnose.error(str(error))

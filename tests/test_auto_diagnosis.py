@@ -147,6 +147,10 @@ def test_auto_diagnosis_tracks_each_dependency_of_a_healthy_service(processing_s
          "Trace delivery", "cannot be combined with --workflow"),
         (["--check-dependencies", "--workflow", "queue"],
          "Check backlog", "--check-dependencies requires the HTTP health workflow"),
+        (["--check-consumer-health", "--workflow", "http_health"],
+         "Check HTTP health", "--check-consumer-health requires the RabbitMQ queue workflow"),
+        (["--check-consumer-health", "--management-url", "http://localhost", "--queue", "orders"],
+         "Check backlog", "--check-consumer-health requires rabbitmq.consumer_health_url in --config"),
         (["--check-dependencies", "--config", "unused.json", "--delivery-id", "1001"],
          "Trace delivery", "--check-dependencies requires the HTTP health workflow"),
         (["--voter-id", "001abc"], "Trace voter", "--voter-id requires --config"),
@@ -325,11 +329,14 @@ def test_auto_plan_rejects_embedded_credentials_before_showing_sources(endpoint_
 
 
 @pytest.mark.parametrize(
-    ("pending", "unacknowledged", "processing_source"),
-    [(3, 0, "processing_url"), (None, 2, "processing_record"), (0, 0, "processing_url")],
+    ("pending", "unacknowledged", "processing_source", "force_consumer"),
+    [
+        (3, 0, "processing_url", False), (None, 2, "processing_record", False),
+        (0, 0, "processing_url", False), (0, 0, "processing_url", True),
+    ],
 )
-def test_target_queue_uses_configured_checks_only_when_queue_activity_is_observed(
-    processing_service, monkeypatch, pending, unacknowledged, processing_source,
+def test_target_queue_checks_follow_each_configured_condition(
+    processing_service, monkeypatch, pending, unacknowledged, processing_source, force_consumer,
 ) -> None:
     metrics = json.dumps({
         "messages_ready": pending, "messages_unacknowledged": unacknowledged, "consumers": 1,
@@ -366,7 +373,14 @@ def test_target_queue_uses_configured_checks_only_when_queue_activity_is_observe
                     processing_source: processing_value,
                 },
             }), encoding="utf-8")
-            result = _cli(directory, "diagnose-auto", "--config", str(config), "队列积压")
+            options = ["--check-consumer-health"] if force_consumer else []
+            if force_consumer:
+                preview = _cli(directory, "diagnose-auto", "--config", str(config), *options, "--plan", "队列积压")
+                assert preview.returncode == 0, preview.stderr
+                checks = json.loads(preview.stdout)["checks"]
+                assert [check["when"] for check in checks] == ["always", "always", "queue_activity"]
+                assert requests == []
+            result = _cli(directory, "diagnose-auto", "--config", str(config), *options, "队列积压")
         assert result.returncode == 0, result.stderr
         report = json.loads(result.stdout)
         config.unlink()
@@ -377,7 +391,10 @@ def test_target_queue_uses_configured_checks_only_when_queue_activity_is_observe
     record_source = f"{endpoint}?queue=orders&vhost=staging" if processing_source == "processing_url" else record_path.as_uri()
     assert report["planned_checks"] == [
         {"tool": "inspect_queue", "when": "always", "count": 1, "sources": [base + queue_path]},
-        {"tool": "inspect_consumer_endpoint", "when": "queue_activity", "count": 1, "sources": [f"{base}/consumer-health"]},
+        {
+            "tool": "inspect_consumer_endpoint", "when": "always" if force_consumer else "queue_activity",
+            "count": 1, "sources": [f"{base}/consumer-health"],
+        },
         {"tool": "inspect_processing", "when": "queue_activity", "count": 1, "sources": [record_source]},
     ]
     expected_calls = 0 if pending == 0 and unacknowledged == 0 else 1
@@ -385,14 +402,22 @@ def test_target_queue_uses_configured_checks_only_when_queue_activity_is_observe
     assert fr"| inspect\_queue | {base}{queue_path} | Always | 1 | 1 |" in markdown.stdout
     for tool in ("inspect_consumer_endpoint", "inspect_processing"):
         label = tool.replace("_", "\\_")
+        forced = tool == "inspect_consumer_endpoint" and force_consumer
+        condition = "Always" if forced else "Pending or unacknowledged messages observed"
         assert any(
             line.startswith(f"| {label} | ")
-            and line.endswith(f" | Pending or unacknowledged messages observed | 1 | {expected_calls} |")
+            and line.endswith(f" | {condition} | 1 | {1 if forced else expected_calls} |")
             for line in markdown.stdout.splitlines()
         )
     if pending == 0 and unacknowledged == 0:
-        assert requests == [queue_path]
-        assert [call["tool"] for call in report["tool_calls"]] == ["inspect_queue"]
+        expected_paths = [queue_path]
+        expected_tools = ["inspect_queue"]
+        if force_consumer:
+            expected_paths.append("/consumer-health")
+            expected_tools.append("inspect_consumer_endpoint")
+            assert report["evidence"][1]["health"] == "unhealthy"
+        assert requests == expected_paths
+        assert [call["tool"] for call in report["tool_calls"]] == expected_tools
         return
 
     queue, health, processing = report["evidence"]

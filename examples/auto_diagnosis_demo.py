@@ -101,7 +101,8 @@ def run_demo(directory: Path) -> None:
                     service_log.write_text(json.dumps(entry) + "\n", encoding="utf-8")
                 recheck_options = ("--check-service-log", "--check-dependencies") if recovered else ()
                 run_cli("diagnose-auto", "--config", str(config), *recheck_options, "Check HTTP health")
-                run_cli("diagnose-auto", "--config", str(config), "Check the queue backlog")
+                consumer_options = ("--check-consumer-health",) if recovered else ()
+                run_cli("diagnose-auto", "--config", str(config), *consumer_options, "Check the queue backlog")
         finally:
             server.shutdown()
             thread.join()

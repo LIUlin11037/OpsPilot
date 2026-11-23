@@ -365,16 +365,18 @@ def test_rabbitmq_diagnosis_reads_record_only_for_observed_queue_activity(
 
 
 @pytest.mark.parametrize(
-    ("pending", "unacknowledged", "broker_status", "targeted", "health"),
+    ("pending", "unacknowledged", "broker_status", "targeted", "health", "force_consumer"),
     [
-        (3, 0, 200, False, "unhealthy"),
-        (None, 3, 200, True, "unknown"),
-        (0, 0, 200, True, None),
-        (0, 3, 403, False, None),
+        (3, 0, 200, False, "unhealthy", False),
+        (None, 3, 200, True, "unknown", False),
+        (0, 0, 200, True, None, False),
+        (0, 3, 403, False, None, False),
+        (0, 0, 200, True, "unhealthy", True),
+        (0, 3, 403, False, "unknown", True),
     ],
 )
-def test_rabbitmq_diagnosis_checks_configured_consumer_on_queue_activity(
-    processing_service, pending, unacknowledged, broker_status, targeted, health,
+def test_rabbitmq_diagnosis_checks_consumer_on_activity_or_explicit_recheck(
+    processing_service, pending, unacknowledged, broker_status, targeted, health, force_consumer,
 ) -> None:
     metrics = json.dumps({
         "messages_ready": pending, "messages_unacknowledged": unacknowledged, "consumers": 1,
@@ -403,6 +405,8 @@ def test_rabbitmq_diagnosis_checks_configured_consumer_on_queue_activity(
         ]
         if targeted:
             options.extend(("--processing-url", processing_url, "--message-id", "msg-101"))
+        if force_consumer:
+            options.append("--check-consumer-health")
         result = _cli(*options, "Check queue and consumer", cwd=directory)
 
     assert result.returncode == 0, result.stderr

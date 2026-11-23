@@ -31,3 +31,5 @@ def test_demo_compares_http_health_service_logs_and_queue_backlog() -> None:
     assert before.startswith("Outcome observed, Error-level entries 1,")
     assert after.startswith("Outcome observed, Error-level entries 0,")
     assert "| Pending messages | 3 | 0 |" in queue
+    consumer_change, = (line for line in queue.splitlines() if line.startswith("| Consumer |"))
+    assert "HTTP status 503 | Outcome observed, Health healthy, HTTP status 204 |" in consumer_change

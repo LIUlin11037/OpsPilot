@@ -554,9 +554,12 @@ def run_queue_diagnosis(
     *,
     message_id: str | None = None,
     consumer_health_tool: HealthTool | None = None,
+    check_consumer_health: bool = False,
 ) -> DiagnosisReport:
     if message_id is not None and (not message_id.strip() or processing_tool is None):
         raise ValueError("A nonempty message ID requires a configured processing source.")
+    if check_consumer_health and consumer_health_tool is None:
+        raise ValueError("An explicit consumer health check requires a configured endpoint.")
 
     graph = _queue_graph(tool)
     state: DiagnosisState = {"question": question}
@@ -570,15 +573,22 @@ def run_queue_diagnosis(
         processing_step = "inspect_processing"
 
     active_step = processing_step
+    inactive_step = processing_step if message_id is not None else "report"
     if consumer_health_tool is not None:
         graph.add_node(
             "inspect_consumer_endpoint",
             partial(_inspect, "consumer_health", partial(_read_consumer_health, consumer_health_tool)),
         )
-        graph.add_edge("inspect_consumer_endpoint", processing_step)
+        if check_consumer_health and processing_step != inactive_step:
+            graph.add_conditional_edges(
+                "inspect_consumer_endpoint", _has_queue_activity, {True: processing_step, False: inactive_step},
+            )
+        else:
+            graph.add_edge("inspect_consumer_endpoint", processing_step)
         active_step = "inspect_consumer_endpoint"
+        if check_consumer_health:
+            inactive_step = active_step
 
-    inactive_step = processing_step if message_id is not None else "report"
     if active_step == inactive_step:
         graph.add_edge("inspect_queue", active_step)
     else:

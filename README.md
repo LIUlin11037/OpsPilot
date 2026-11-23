@@ -99,7 +99,7 @@ python -m venv .venv
 
 每次运行都会在 `.opspilot/demo/` 下创建一个独立目录，保存一个含 4 份报告的 SQLite 数据库和两份 Markdown 对比。打开 `health-comparison.md` 可以看到主服务和依赖都从 503 恢复到 204，日志错误从 1 条降到 0 条，整体诊断从 `undetermined` 变为 `no_failure_observed`。演示在故障和恢复阶段分别生成一份日志快照，恢复时主动复查依赖和日志，无需等待故障日志退出五分钟统计窗口。
 
-打开 `queue-comparison.md` 可以看到待投递消息从 3 降到 0，以及清空后缺少消费者端点观测。若需回看单份报告，将演示输出的数据库路径传给 `opspilot --db PATH reports`。
+打开 `queue-comparison.md` 可以看到待投递消息从 3 降到 0，以及清空后主动复查到消费者端点从 503 恢复到 204。若需回看单份报告，将演示输出的数据库路径传给 `opspilot --db PATH reports`。
 
 ## HTTP 健康诊断
 
@@ -295,6 +295,12 @@ $queueSource = "http://127.0.0.1:15672/api/queues/%2F/orders"
 ### 查看消费者端点健康
 
 已知消费者的 HTTP 健康端点时，可在 RabbitMQ 模式加上 `--consumer-health-url`。观察到待投递或待确认消息时，OpsPilot 发送只读 GET，记录端点健康状态、观测时间和耗时。待投递数缺失时，已观测到的待确认消息也能触发检查。健康状态说明该端点当时的响应，积压原因仍需结合队列和业务证据核查。
+
+清空队列后可加上 `--check-consumer-health` 主动复查消费者。直接使用 `diagnose` 时传入 `--consumer-health-url`；使用 `diagnose-auto` 时在目标配置中设置 `rabbitmq.consumer_health_url`。报告分别记录队列状态和消费者健康，业务处理记录按队列活动或指定消息 ID 查询。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot diagnose-auto --config .\target.json --check-consumer-health "复查队列和消费者"
+```
 
 ```powershell
 .\.venv\Scripts\python.exe -m opspilot diagnose --management-url http://127.0.0.1:15672 --queue "orders" --consumer-health-url http://127.0.0.1:8081/health "队列有积压，消费者端点能响应吗？"
