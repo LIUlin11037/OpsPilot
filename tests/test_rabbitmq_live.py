@@ -7,6 +7,7 @@ import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import monotonic, sleep
 from urllib.parse import parse_qs, urlsplit
@@ -205,7 +206,6 @@ def test_live_queue_lifecycle(
                 for check in backlog["next_checks"]
             )
 
-            health_status = 204
             channel.basic_qos(prefetch_count=prefetch)
             channel.basic_consume(
                 queue=name, on_message_callback=lambda *_delivery: None, auto_ack=False
@@ -228,7 +228,7 @@ def test_live_queue_lifecycle(
             queue_evidence, health, processing = delivered["evidence"]
             assert _snapshot(queue_evidence) == delivered_snapshot
             assert health["source"] == health_url
-            assert health["health"] == "healthy" and health["http_status"] == 204
+            assert health["health"] == "unhealthy" and health["http_status"] == 503
             assert f"awaiting acknowledgement is {prefetch}" in delivered["conclusion"]
             assert delivered["processing_correlation"] == "unknown"
             assert processing["message_id"] == "order-msg-101"
@@ -250,15 +250,6 @@ def test_live_queue_lifecycle(
             assert all(call["duration_ms"] >= 0 for call in delivered["tool_calls"])
             saved = _run_cli(directory, "report", delivered["task_id"])
             assert saved == delivered
-            recovery = _run_cli(
-                directory, "compare-queue", backlog["task_id"], delivered["task_id"],
-                "--include-consumer-health",
-            )
-            recovered, = recovery["consumer_health_changes"]
-            assert recovered["source"] == health_url
-            assert recovered["before"]["http_status"] == 503
-            assert recovered["after"]["http_status"] == 204
-
             for remaining in range(MESSAGE_COUNT, 0, -prefetch):
                 in_flight = min(remaining, prefetch)
                 _wait_for_snapshot(connector, (remaining - in_flight, in_flight, 1))
@@ -284,3 +275,52 @@ def test_live_queue_lifecycle(
             if prefetch < MESSAGE_COUNT:
                 expected_changes["queue.pending_messages"] = (MESSAGE_COUNT - prefetch, 0)
             assert changes == expected_changes
+
+            target = Path(directory) / "target.json"
+            target.write_text(json.dumps({
+                "rabbitmq": {
+                    "management_url": settings.management_url,
+                    "queue": name,
+                    "vhost": parameters.virtual_host,
+                    "consumer_health_url": health_url,
+                },
+            }), encoding="utf-8")
+            rechecked = _run_cli(
+                directory, "diagnose-auto", "--config", str(target),
+                "--check-consumer-health", "Check drained queue and consumer",
+            )
+            assert rechecked["status"] == "no_backlog_observed"
+            queue_evidence, health = rechecked["evidence"]
+            assert _snapshot(queue_evidence) == (0, 0, 1)
+            assert health["source"] == health_url
+            assert health["health"] == "unhealthy" and health["http_status"] == 503
+            assert rechecked["planned_checks"][-1] == {
+                "tool": "inspect_consumer_endpoint", "when": "always",
+                "count": 1, "sources": [health_url],
+            }
+            ongoing = _run_cli(
+                directory, "compare-queue", backlog["task_id"], rechecked["task_id"],
+                "--include-consumer-health",
+            )
+            assert {"field": "queue.pending_messages", "before": MESSAGE_COUNT, "after": 0} in ongoing["changes"]
+            assert ongoing["consumer_health_changes"] == []
+            issue, = ongoing["unchanged_endpoint_issues"]
+            assert issue["role"] == "consumer" and issue["source"] == health_url
+            assert issue["observation"]["http_status"] == 503
+
+            health_status = 204
+            recovered = _run_cli(
+                directory, "diagnose", *diagnosis_options,
+                "--check-consumer-health", "Verify consumer recovery",
+            )
+            recovery = _run_cli(
+                directory, "compare-queue", rechecked["task_id"], recovered["task_id"],
+                "--include-consumer-health",
+            )
+            assert recovery["changes"] == []
+            change, = recovery["consumer_health_changes"]
+            assert change["source"] == health_url
+            assert change["before"]["http_status"] == 503
+            assert change["after"]["http_status"] == 204
+            assert "unchanged_endpoint_issues" not in recovery
+            assert health_requests == ["/health"] * 4
