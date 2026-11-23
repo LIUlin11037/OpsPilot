@@ -51,7 +51,6 @@ from opspilot.target_config import RabbitMQTargetConfig, load_target_config
 from opspilot.task_store import StoredReport, list_reports, load_report, save_report
 
 
-_LOG_CONFIG_REQUIRED = "--check-service-log requires service_log_path in the health configuration"
 _CONSUMER_HEALTH_WORKFLOW_REQUIRED = "--check-consumer-health requires the RabbitMQ queue workflow"
 _VOTER_ID_ERROR = "--voter-id must contain 1 to 255 hexadecimal digits"
 
@@ -245,12 +244,24 @@ def _health_config(args: argparse.Namespace) -> HealthConfig:
     )
 
 
+def _validate_health_rechecks(
+    config: HealthConfig, *, check_dependencies: bool, check_service_log: bool,
+) -> None:
+    if check_service_log and config.service_log_path is None:
+        raise ValueError("--check-service-log requires service_log_path in the health configuration")
+    if check_dependencies and not (
+        config.dependency_urls or config.redis_dependency_urls or config.mysql_dependency_urls
+    ):
+        raise ValueError("--check-dependencies requires at least one configured HTTP, Redis, or MySQL dependency")
+
+
 def _run_configured_health(
     question: str, config: HealthConfig, *, check_dependencies: bool = False,
     check_service_log: bool = False,
 ) -> DiagnosisReport:
-    if check_service_log and config.service_log_path is None:
-        raise ValueError(_LOG_CONFIG_REQUIRED)
+    _validate_health_rechecks(
+        config, check_dependencies=check_dependencies, check_service_log=check_service_log,
+    )
     service = HttpHealthConnector(config.service_url, config.timeout_seconds)
     dependencies: list[HealthTool] = [
         HttpHealthConnector(url, config.timeout_seconds) for url in config.dependency_urls
@@ -372,8 +383,9 @@ def _prepare_auto_diagnosis(
             raise ValueError(
                 "Supply --health-config or a health section in --config for the HTTP health workflow."
             )
-        if args.check_service_log and config.service_log_path is None:
-            raise ValueError(_LOG_CONFIG_REQUIRED)
+        _validate_health_rechecks(
+            config, check_dependencies=args.check_dependencies, check_service_log=args.check_service_log,
+        )
         service = HttpHealthConnector(config.service_url, config.timeout_seconds)
         checks: list[PlannedCheck] = [{
             "tool": "inspect_service_health", "when": "always", "count": 1, "sources": [service.endpoint],
@@ -557,7 +569,7 @@ def main() -> None:
     for health_parser in (health, auto_diagnose):
         health_parser.add_argument(
             "--check-dependencies", action="store_true",
-            help="Check configured dependencies even when the service is healthy.",
+            help="Check configured dependencies even when the service is healthy. Requires a configured dependency.",
         )
         health_parser.add_argument(
             "--check-service-log", action="store_true",

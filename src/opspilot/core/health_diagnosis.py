@@ -135,6 +135,8 @@ def run_health_diagnosis(
         dependency_tools = tuple(dependency)
     else:
         dependency_tools = () if dependency is None else (dependency,)
+    if check_dependencies and not dependency_tools:
+        raise ValueError("An explicit dependency check requires at least one dependency tool.")
 
     graph = StateGraph(_HealthState)
     graph.add_node("check_service", partial(_check_service, service))

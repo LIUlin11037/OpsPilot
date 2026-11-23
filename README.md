@@ -163,9 +163,9 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m opspilot diagnose-http --config .\health.json --check-dependencies "复查服务和依赖"
 ```
 
-`--check-dependencies` 适用于配置文件和直接传入 URL 两种方式。启用后，即使主服务健康，也会检查所有已配置的依赖。任一已检查的依赖异常或状态未知时，报告的诊断状态为 `undetermined`。
+`--check-dependencies` 至少需要配置一个 HTTP、Redis 或 MySQL 依赖端点。既可通过配置文件指定，也可直接传入 URL。启用后，即使主服务健康，也会检查所有已配置的依赖。任一已检查的依赖异常或状态未知时，报告的诊断状态为 `undetermined`。
 
-`diagnose-auto` 选中 HTTP 健康流程时，也支持 `--check-dependencies`。可与 `--check-service-log` 一起使用。加上 `--plan` 即可预览，依赖检查会标记为 `always`。
+`diagnose-auto` 选中 HTTP 健康流程时，也支持 `--check-dependencies`。可与 `--check-service-log` 一起使用。加上 `--plan` 即可预览，依赖检查会标记为 `always`。缺少依赖端点时，预览和执行都会在访问主服务前提示补充配置。
 
 ```powershell
 .\.venv\Scripts\python.exe -m opspilot diagnose-auto --config .\target.json --workflow http_health --check-dependencies --check-service-log "复查 HTTP 服务、依赖和日志"

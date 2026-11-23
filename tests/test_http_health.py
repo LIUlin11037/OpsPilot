@@ -10,6 +10,7 @@ import pytest
 from opspilot.__main__ import main
 from opspilot.connectors.http_health import HttpHealthConnector
 from opspilot.connectors.mysql import MySQLConnector, MySQLRead
+from opspilot.core.health_diagnosis import run_health_diagnosis
 from opspilot.health_config import HealthConfig, load_health_config
 
 
@@ -127,6 +128,45 @@ def test_health_cli_checks_dependencies_when_service_is_healthy(
     assert [(check["evidence_index"], check["action"]) for check in report["next_checks"]] == (
         [] if expected_action is None else [(1, expected_action)]
     )
+
+
+@pytest.mark.parametrize("entry", ["direct", "config", "auto", "plan"])
+def test_health_cli_requires_a_dependency_for_an_explicit_recheck(processing_service, entry) -> None:
+    automatic = entry in ("auto", "plan")
+    command = "diagnose-auto" if automatic else "diagnose-http"
+    with TemporaryDirectory(prefix="opspilot-required-dependency-") as directory:
+        database = Path(directory) / "reports.sqlite3"
+        with processing_service(lambda _path: (204, b"")) as (endpoint, requests):
+            if entry == "direct":
+                options = ("--service-url", endpoint)
+            else:
+                config = Path(directory) / "health.json"
+                health = {
+                    "service_url": endpoint, "dependency_urls": [],
+                    "redis_dependency_urls": [], "mysql_dependency_urls": [],
+                }
+                config.write_text(json.dumps({"health": health} if automatic else health), encoding="utf-8")
+                options = ("--config", str(config))
+            if entry == "plan":
+                options += ("--plan",)
+            result = _cli(
+                directory, "--db", str(database), command, *options, "--check-dependencies", "Recheck dependencies",
+            )
+
+        assert result.returncode == 2
+        assert "--check-dependencies requires at least one" in result.stderr
+        assert result.stdout == ""
+        assert requests == []
+        assert not database.exists()
+
+
+def test_health_workflow_requires_a_dependency_tool_for_an_explicit_recheck(processing_service) -> None:
+    with processing_service(lambda _path: (204, b"")) as (endpoint, requests):
+        service = HttpHealthConnector(endpoint)
+        with pytest.raises(ValueError, match="at least one dependency"):
+            run_health_diagnosis("Recheck dependencies", service, [], check_dependencies=True)
+
+    assert requests == []
 
 
 def test_health_connector_distinguishes_socket_timeout(processing_service) -> None:
