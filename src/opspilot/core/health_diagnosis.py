@@ -18,6 +18,7 @@ from opspilot.core.diagnosis import (
     measure_tool_call,
     read_health,
     suggest_next_checks,
+    tool_call_from_evidence,
 )
 
 
@@ -39,8 +40,7 @@ def _inspect(
 ) -> tuple[HealthEvidence, ToolCall]:
     read, duration_ms = measure_tool_call(partial(read_health, tool))
     evidence: HealthEvidence = {**read, "tool": name}
-    call: ToolCall = {"tool": name, "outcome": read["outcome"], "duration_ms": duration_ms}
-    return evidence, call
+    return evidence, tool_call_from_evidence(evidence, duration_ms)
 
 
 def _check_service(tool: HealthTool, _state: _HealthState) -> _HealthState:
@@ -63,10 +63,7 @@ def _check_service_log(tool: ServiceLogTool, state: _HealthState) -> _HealthStat
         partial(tool.inspect_recent_errors, state["service"]["observed_at"])
     )
     evidence: ServiceLogEvidence = {**read, "tool": "inspect_service_log"}
-    call: ToolCall = {
-        "tool": "inspect_service_log", "outcome": read["outcome"], "duration_ms": duration_ms,
-    }
-    return {"service_log": evidence, "tool_calls": [call]}
+    return {"service_log": evidence, "tool_calls": [tool_call_from_evidence(evidence, duration_ms)]}
 
 
 def _after_service(

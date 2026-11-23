@@ -172,6 +172,9 @@ def test_health_cli_preserves_all_observations_when_a_dependency_raises(
         report = json.loads(captured.out)
         assert requests == ["/service", "/%E5%81%A5%E5%BA%B7/%2F"]
         assert [item["outcome"] for item in report["tool_calls"]] == ["observed", "missing", "observed"]
+        assert [item["source"] for item in report["tool_calls"]] == [
+            f"{base}/service", f"{base}/offline", f"{base}/健康/%2F",
+        ]
         service, offline, later = report["evidence"]
         assert service["http_status"] == 503
         assert offline["source"] == f"{base}/offline"
@@ -179,6 +182,11 @@ def test_health_cli_preserves_all_observations_when_a_dependency_raises(
         assert later["http_status"] == 204 and later["source"] == f"{base}/健康/%2F"
         stored = _cli(directory, "--db", str(database), "report", report["task_id"])
         assert stored.returncode == 0 and json.loads(stored.stdout) == report
+        markdown = _cli(directory, "--db", str(database), "report", report["task_id"], "--format", "markdown")
+        assert markdown.returncode == 0, markdown.stderr
+        calls_table = markdown.stdout.split("## Tool calls", 1)[1]
+        assert fr"| inspect\_dependency\_health | {base}/offline | missing |" in calls_table
+        assert fr"| inspect\_dependency\_health | {base}/健康/%2F | observed |" in calls_table
 
 
 def test_invalid_health_url_does_not_create_report_store() -> None:

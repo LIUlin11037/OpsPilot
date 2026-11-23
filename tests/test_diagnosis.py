@@ -226,9 +226,9 @@ def test_tool_call_durations_are_measured_individually(
     report = run_diagnosis("Messages are stuck in the queue", tools, adapter)
 
     assert report["tool_calls"] == [
-        {"tool": "inspect_queue", "outcome": "observed", "duration_ms": 1.0},
-        {"tool": "inspect_consumer", "outcome": "observed", "duration_ms": 2.5},
-        {"tool": "inspect_processing", "outcome": "timeout", "duration_ms": 3.0},
+        {"tool": "inspect_queue", "outcome": "observed", "duration_ms": 1.0, "source": "simulated:queue"},
+        {"tool": "inspect_consumer", "outcome": "observed", "duration_ms": 2.5, "source": "simulated:consumer"},
+        {"tool": "inspect_processing", "outcome": "timeout", "duration_ms": 3.0, "source": "simulated:processing"},
     ]
 
 

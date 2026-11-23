@@ -135,6 +135,7 @@ def test_http_cli_uses_the_configured_log_on_failure_or_explicit_recheck(
             assert report["evidence"][-1]["http_status"] == 204
         assert requests == expected_requests
         assert [call["tool"] for call in report["tool_calls"]] == tools
+        assert [call["source"] for call in report["tool_calls"]] == [item["source"] for item in report["evidence"]]
         if automatic:
             assert report["planned_checks"][1] == {
                 "tool": "inspect_service_log", "when": "always" if log_flag else "service_unhealthy", "count": 1,

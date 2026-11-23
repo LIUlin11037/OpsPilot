@@ -93,7 +93,8 @@ def test_trace_markdown_preserves_zero_rows_and_unavailable_checks(
         assert "Matching rows" not in notification
 
 
-def test_markdown_supports_reports_saved_before_tool_call_data(report_db: Path) -> None:
+@pytest.mark.parametrize("with_tool_call", [False, True])
+def test_markdown_supports_reports_saved_before_tool_call_sources(report_db: Path, with_tool_call: bool) -> None:
     early_report: DiagnosisReport = {
         "question": "Check queue",
         "status": "undetermined",
@@ -104,11 +105,17 @@ def test_markdown_supports_reports_saved_before_tool_call_data(report_db: Path) 
             "observed_at": "2026-11-19T06:00:00+00:00",
         }],
     }
+    if with_tool_call:
+        early_report["tool_calls"] = [{"tool": "inspect_queue", "outcome": "timeout", "duration_ms": 12.0}]
     stored = save_report(report_db, early_report)
 
     output = _read_report(report_db, stored["task_id"], "--format", "markdown")
 
     assert early_report["conclusion"] in output
     assert r"| inspect\_queue | timeout |  |  | legacy\|source | 2026-11-19T06:00:00+00:00 |" in output
-    assert "## Tool calls" not in output
+    if with_tool_call:
+        assert "| Tool | Outcome | Duration (ms) |" in output
+        assert r"| inspect\_queue | timeout | 12.000 |" in output
+    else:
+        assert "## Tool calls" not in output
     assert "## Suggested read-only checks" not in output

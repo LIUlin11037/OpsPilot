@@ -279,13 +279,13 @@ def render_markdown(report: StoredReport) -> str:
     else:
         lines.append("No evidence was recorded.")
 
+    calls = report.get("tool_calls")
     if report.get("planned_checks"):
         lines.extend([
             "", "## Planned checks", "",
             "| Tool | When | Configured calls | Recorded calls |",
             "| --- | --- | ---: | ---: |",
         ])
-        calls = report.get("tool_calls")
         recorded_counts = Counter(call["tool"] for call in calls) if calls is not None else None
         for check in report["planned_checks"]:
             tool = check["tool"]
@@ -295,14 +295,18 @@ def render_markdown(report: StoredReport) -> str:
                 f"| {_value(tool)} | {_value(condition)} | {check['count']} | {_value(recorded)} |"
             )
 
-    if report.get("tool_calls"):
+    if calls:
+        has_sources = any("source" in call for call in calls)
+        source_header = "Source | " if has_sources else ""
+        source_separator = "--- | " if has_sources else ""
         lines.extend([
             "", "## Tool calls", "",
-            "| Tool | Outcome | Duration (ms) |",
-            "| --- | --- | ---: |",
+            f"| Tool | {source_header}Outcome | Duration (ms) |",
+            f"| --- | {source_separator}--- | ---: |",
         ])
-        for call in report["tool_calls"]:
+        for call in calls:
+            source = f"{_value(call.get('source'))} | " if has_sources else ""
             lines.append(
-                f"| {_value(call['tool'])} | {_value(call['outcome'])} | {call['duration_ms']:.3f} |"
+                f"| {_value(call['tool'])} | {source}{_value(call['outcome'])} | {call['duration_ms']:.3f} |"
             )
     return "\n".join(lines) + "\n"

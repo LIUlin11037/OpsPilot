@@ -141,10 +141,14 @@ Evidence = (
 )
 
 
-class ToolCall(TypedDict):
+class _ToolCallFields(TypedDict):
     tool: ToolName
     outcome: ObservationOutcome
     duration_ms: float
+
+
+class ToolCall(_ToolCallFields, total=False):
+    source: str
 
 
 class PlannedCheck(TypedDict):
@@ -501,18 +505,20 @@ def measure_tool_call(tool: Callable[[], ToolResult]) -> tuple[ToolResult, float
     return result, (perf_counter_ns() - started_ns) / 1_000_000
 
 
+def tool_call_from_evidence(evidence: Evidence, duration_ms: float) -> ToolCall:
+    return {
+        "tool": evidence["tool"], "outcome": evidence["outcome"],
+        "duration_ms": duration_ms, "source": evidence["source"],
+    }
+
+
 def _inspect(
     state_field: Literal["queue", "consumer", "consumer_health", "processing"],
     tool: Callable[[], Evidence],
     _state: DiagnosisState,
 ) -> dict[str, Evidence | list[ToolCall]]:
     evidence, duration_ms = measure_tool_call(tool)
-    call: ToolCall = {
-        "tool": evidence["tool"],
-        "outcome": evidence["outcome"],
-        "duration_ms": duration_ms,
-    }
-    return {state_field: evidence, "tool_calls": [call]}
+    return {state_field: evidence, "tool_calls": [tool_call_from_evidence(evidence, duration_ms)]}
 
 
 def _read_consumer_health(tool: HealthTool) -> HealthEvidence:
