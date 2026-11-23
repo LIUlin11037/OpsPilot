@@ -20,7 +20,7 @@ from opspilot.adapters.voting_snapshot import VotingSnapshotAdapter, parse_voter
 from opspilot.connectors.http_health import HttpHealthConnector
 from opspilot.connectors.jsonl_service_log import JsonlServiceLogConnector
 from opspilot.connectors.mysql import MySQLConnector, MySQLHealthConnector
-from opspilot.connectors.rabbitmq import RabbitMQQueueConnector
+from opspilot.connectors.rabbitmq import RabbitMQQueueConnector, queue_endpoint
 from opspilot.connectors.redis_health import RedisHealthConnector
 from opspilot.connectors.simulated import SimulatedQueueConnector
 from opspilot.core.diagnosis import (
@@ -317,25 +317,25 @@ def _prepare_auto_diagnosis(
         target = load_target_config(args.config)
         selected_by: Literal["delivery_id", "voter_id"]
         if voter_id is not None:
-            if target.voting_snapshot is None:
+            snapshot = target.voting_snapshot
+            if snapshot is None:
                 raise ValueError("--voter-id requires voting.snapshot in --config")
             selected_by = "voter_id"
             entity_id = voter_id
-            run_snapshot = partial(run_target_trace, question, voter_id, VotingSnapshotAdapter(target.voting_snapshot))
+            run_snapshot = partial(run_target_trace, question, voter_id, VotingSnapshotAdapter(snapshot))
         else:
-            if target.hirehub_snapshot is None:
+            snapshot = target.hirehub_snapshot
+            if snapshot is None:
                 raise ValueError("--delivery-id requires hirehub.snapshot in --config")
             selected_by = "delivery_id"
             entity_id = args.delivery_id
-            run_snapshot = partial(
-                run_target_trace, question, args.delivery_id, HireHubSnapshotAdapter(target.hirehub_snapshot),
-            )
+            run_snapshot = partial(run_target_trace, question, args.delivery_id, HireHubSnapshotAdapter(snapshot))
         routing: DiagnosisRoute = {
             "workflow": "target_trace", "matched_terms": [], "selected_by": selected_by,
         }
         plan: _AutoDiagnosisPlan = {
             "question": question, "routing": routing,
-            "scope": {selected_by: entity_id},
+            "scope": {selected_by: entity_id, "snapshot_source": snapshot.absolute().as_uri()},
             "checks": [{"tool": "inspect_target_trace", "when": "always", "count": 1}],
         }
         return plan, run_snapshot
@@ -376,9 +376,8 @@ def _prepare_auto_diagnosis(
             elif args.check_service_log:
                 dependency_check["when"] = "service_unhealthy_or_unknown_or_log_errors"
             checks.append(dependency_check)
-        plan = {
-            "question": question, "routing": routing, "scope": {}, "checks": checks,
-        }
+        service = HttpHealthConnector(config.service_url, config.timeout_seconds)
+        plan = {"question": question, "routing": routing, "scope": {"service_url": service.endpoint}, "checks": checks}
         return plan, partial(
             _run_configured_health, question, config,
             check_dependencies=args.check_dependencies, check_service_log=args.check_service_log,
@@ -397,7 +396,8 @@ def _prepare_auto_diagnosis(
     if message_id is not None and not has_processing_source:
         raise ValueError("--message-id requires rabbitmq.processing_url or rabbitmq.processing_record")
 
-    scope: dict[str, str | int] = {"queue": rabbitmq.queue, "vhost": rabbitmq.vhost}
+    endpoint = queue_endpoint(rabbitmq.management_url, rabbitmq.queue, rabbitmq.vhost)
+    scope: dict[str, str | int] = {"queue": rabbitmq.queue, "vhost": rabbitmq.vhost, "queue_source": endpoint.geturl()}
     if message_id is not None:
         scope["message_id"] = message_id
     checks = [{"tool": "inspect_queue", "when": "always", "count": 1}]
@@ -716,6 +716,7 @@ def main() -> None:
                     return
                 report = run_diagnostic()
                 report["routing"] = plan["routing"]
+                report["planned_scope"] = plan["scope"]
                 report["planned_checks"] = plan["checks"]
             except ValueError as error:
                 auto_diagnose.error(str(error))

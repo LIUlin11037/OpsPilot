@@ -20,6 +20,16 @@ _ROUTE_BASES = {
     "voter_id": "Requested voter ID",
     "workflow": "Explicit workflow",
 }
+_SCOPE_LABELS = {
+    "service_url": "Service URL",
+    "queue_source": "Queue source",
+    "queue": "Queue",
+    "vhost": "Virtual host",
+    "message_id": "Message ID",
+    "delivery_id": "Delivery ID",
+    "voter_id": "Voter ID",
+    "snapshot_source": "Snapshot source",
+}
 _PLAN_CONDITIONS = {
     "always": "Always",
     "service_unhealthy": "Service unhealthy",
@@ -215,6 +225,14 @@ def render_markdown(report: StoredReport) -> str:
         lines.append(f"- **Message correlation** {_value(correlation)}")
     if "requested_message_id" in report:
         lines.append(f"- **Requested message ID** {_value(report['requested_message_id'])}")
+
+    planned_scope = report.get("planned_scope")
+    if planned_scope:
+        lines.extend(["", "## Planned scope", ""])
+        lines.extend(
+            f"- **{_value(_SCOPE_LABELS.get(key, key))}** {_value(value)}"
+            for key, value in planned_scope.items()
+        )
 
     trace = report.get("target_trace")
     if trace is not None:

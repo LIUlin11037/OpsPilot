@@ -249,6 +249,7 @@ class DiagnosisReport(DiagnosisReportFields, total=False):
     target_trace: TargetTraceSummary
     next_checks: list[NextCheck]
     routing: DiagnosisRoute
+    planned_scope: dict[str, str | int]
     planned_checks: list[PlannedCheck]
 
 

@@ -81,13 +81,13 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m opspilot diagnose-auto --config .\target.json --workflow queue "接口返回 503，队列也有积压"
 ```
 
-使用 `--plan` 可预览选中的流程、查询范围和检查条件。预览根据本地配置生成 JSON，连接可用性和数据来源在执行诊断时验证。
+使用 `--plan` 可预览选中的流程、查询范围和检查条件。查询范围包含主服务 URL、RabbitMQ 队列地址或快照来源。预览根据本地配置生成 JSON，网络请求和快照读取在执行诊断时进行。
 
 ```powershell
 .\.venv\Scripts\python.exe -m opspilot diagnose-auto --config .\target.json --plan "RabbitMQ 队列积压"
 ```
 
-正式诊断会把计划中的检查写入报告的 `planned_checks`。用 `report TASK_ID --format markdown` 回看时，可以对照配置的调用次数与实际记录的调用次数。实际调用即使超时或返回不可用，也计入记录，具体结果见 `tool_calls`。
+正式诊断会把计划中的目标范围和检查写入报告的 `planned_scope` 与 `planned_checks`。用 `report TASK_ID --format markdown` 回看时，可以看到本次计划检查的目标，并对照配置的调用次数与实际记录的调用次数。实际调用即使超时或返回不可用，也计入记录，具体结果见 `tool_calls`。
 
 ### 本地故障与恢复演示
 

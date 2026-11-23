@@ -205,11 +205,16 @@ def test_auto_explicit_workflow_limits_requests_and_is_recorded_in_report(
         assert report["routing"] == plan["routing"] == {
             "workflow": workflow, "matched_terms": terms, "selected_by": "workflow",
         }
+        assert report["planned_scope"] == plan["scope"]
+        source_key = "service_url" if workflow == "http_health" else "queue_source"
+        assert report["planned_scope"][source_key] == report["evidence"][0]["source"]
         assert report["planned_checks"] == plan["checks"]
         assert requests == [expected_request]
         markdown = _cli(directory, "report", report["task_id"], "--format", "markdown")
         assert markdown.returncode == 0, markdown.stderr
         assert "**Selection basis** Explicit workflow" in markdown.stdout
+        assert "## Planned scope" in markdown.stdout
+        assert report["planned_scope"][source_key] in markdown.stdout
 
 
 @pytest.mark.parametrize(
@@ -266,10 +271,31 @@ def test_auto_plan_previews_checks_without_running_or_saving_a_diagnosis(
         assert plan["question"] == question and plan["routing"]["workflow"] == workflow
         if options:
             assert plan["routing"]["selected_by"] == options[0].removeprefix("--").replace("-", "_")
-        assert plan["scope"] == scope
+        if workflow == "http_health":
+            source = {"service_url": f"{base}/health"}
+        elif workflow == "queue":
+            source = {"queue_source": f"{base}/api/queues/staging/orders"}
+        else:
+            source = {"snapshot_source": (config.parent / "unavailable.json").as_uri()}
+        assert plan["scope"] == {**scope, **source}
         assert [(item["tool"], item["when"], item["count"]) for item in plan["checks"]] == checks
         assert requests == []
         assert not database.exists()
+
+
+@pytest.mark.parametrize(("section", "question"), [("health", "HTTP health"), ("rabbitmq", "Queue backlog")])
+def test_auto_plan_rejects_embedded_credentials_before_showing_scope(section, question) -> None:
+    url = "http://admin:fixture-secret@127.0.0.1:8000"
+    settings = {"service_url": url} if section == "health" else {"management_url": url, "queue": "orders"}
+    with TemporaryDirectory(prefix="opspilot-auto-plan-url-") as directory:
+        config = Path(directory) / "target.json"
+        config.write_text(json.dumps({section: settings}), encoding="utf-8")
+        result = _cli(directory, "diagnose-auto", "--config", str(config), "--plan", question)
+        assert result.returncode == 2
+        assert result.stdout == ""
+        assert "without credentials" in result.stderr
+        assert "fixture-secret" not in result.stderr
+        assert not (Path(directory) / ".opspilot").exists()
 
 
 @pytest.mark.parametrize(
@@ -509,7 +535,7 @@ def test_auto_voting_trace_previews_then_reads_the_configured_snapshot() -> None
         assert plan == {
             "question": question,
             "routing": {"workflow": "target_trace", "matched_terms": [], "selected_by": "voter_id"},
-            "scope": {"voter_id": "001abc"},
+            "scope": {"voter_id": "001abc", "snapshot_source": snapshot.as_uri()},
             "checks": [{"tool": "inspect_target_trace", "when": "always", "count": 1}],
         }
         assert not (Path(directory) / ".opspilot").exists()
@@ -524,6 +550,7 @@ def test_auto_voting_trace_previews_then_reads_the_configured_snapshot() -> None
         assert result.returncode == 0, result.stderr
         report = json.loads(result.stdout)
         assert report["routing"] == plan["routing"]
+        assert report["planned_scope"] == plan["scope"]
         assert report["planned_checks"] == plan["checks"]
         assert report["target_trace"]["entity_id"] == "001abc"
         assert report["target_trace"]["branches"] == {"queued_vote": "observed", "stored_vote": "not_observed"}
@@ -531,6 +558,10 @@ def test_auto_voting_trace_previews_then_reads_the_configured_snapshot() -> None
         markdown = _cli(directory, "report", report["task_id"], "--format", "markdown")
         assert markdown.returncode == 0, markdown.stderr
         assert "**Selection basis** Requested voter ID" in markdown.stdout
+        source_line, = (
+            line for line in markdown.stdout.splitlines() if line.startswith("- **Snapshot source** ")
+        )
+        assert source_line.endswith("/configs/pending%20vote.json")
 
 
 def test_auto_voting_trace_requires_voting_snapshot_configuration() -> None:

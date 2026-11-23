@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from http.client import HTTPConnection, HTTPException, HTTPSConnection
 from math import isfinite
 from typing import Literal
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import SplitResult, quote, urlsplit
 
 from opspilot.core.diagnosis import QueueEvidence, UnavailableQueueEvidence
 
@@ -41,6 +41,22 @@ def _path_segment(name: str) -> str:
     return quote(name, safe="")
 
 
+def queue_endpoint(management_url: str, queue: str, vhost: str) -> SplitResult:
+    if not queue or not vhost:
+        raise ValueError("Queue and virtual host names must be nonempty.")
+    base = urlsplit(management_url)
+    if (
+        base.scheme not in ("http", "https")
+        or not base.hostname
+        or base.username is not None
+        or base.query
+        or base.fragment
+    ):
+        raise ValueError("Use an HTTP(S) management URL without credentials, a query, or a fragment.")
+    path = f"{base.path.rstrip('/')}/api/queues/{_path_segment(vhost)}/{_path_segment(queue)}"
+    return base._replace(path=path)
+
+
 def _nonnegative_count(value: object) -> int | None:
     return value if type(value) is int and value >= 0 else None
 
@@ -55,29 +71,13 @@ class RabbitMQQueueConnector:
     timeout_seconds: float = 5.0
 
     def inspect_queue(self) -> QueueEvidence | RabbitMQUnavailableEvidence:
-        if not self.queue or not self.vhost:
-            raise ValueError("Queue and virtual host names must be nonempty.")
         if not self.username or ":" in self.username:
             raise ValueError("RabbitMQ username must be nonempty and contain no colon.")
         if not isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:
             raise ValueError("Timeout must be a finite positive number.")
 
-        base = urlsplit(self.management_url)
-        if (
-            base.scheme not in ("http", "https")
-            or not base.hostname
-            or base.username is not None
-            or base.query
-            or base.fragment
-        ):
-            raise ValueError(
-                "Use an HTTP(S) management URL without credentials, a query, or a fragment."
-            )
-
-        vhost = _path_segment(self.vhost)
-        queue = _path_segment(self.queue)
-        path = f"{base.path.rstrip('/')}/api/queues/{vhost}/{queue}"
-        source = urlunsplit((base.scheme, base.netloc, path, "", ""))
+        endpoint = queue_endpoint(self.management_url, self.queue, self.vhost)
+        source = endpoint.geturl()
 
         def unavailable(
             reason: FailureReason,
@@ -98,13 +98,13 @@ class RabbitMQQueueConnector:
             }
 
         credentials = b64encode(f"{self.username}:{self.password}".encode()).decode("ascii")
-        connection_type = HTTPSConnection if base.scheme == "https" else HTTPConnection
-        connection = connection_type(base.hostname, base.port, timeout=self.timeout_seconds)
+        connection_type = HTTPSConnection if endpoint.scheme == "https" else HTTPConnection
+        connection = connection_type(endpoint.hostname, endpoint.port, timeout=self.timeout_seconds)
         try:
             with closing(connection):
                 connection.request(
                     "GET",
-                    path,
+                    endpoint.path,
                     headers={
                         "Accept": "application/json",
                         "Authorization": f"Basic {credentials}",
