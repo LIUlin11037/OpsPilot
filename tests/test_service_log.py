@@ -136,6 +136,13 @@ def test_http_cli_uses_the_configured_log_on_failure_or_explicit_recheck(
         assert requests == expected_requests
         assert [call["tool"] for call in report["tool_calls"]] == tools
         assert [call["source"] for call in report["tool_calls"]] == [item["source"] for item in report["evidence"]]
+        skipped = []
+        if "inspect_service_log" not in tools:
+            skipped.append({"tool": "inspect_service_log", "when": "service_unhealthy"})
+        if "inspect_dependency_health" not in tools:
+            condition = "service_unhealthy_or_unknown_or_log_errors" if log_flag else "service_unhealthy_or_unknown"
+            skipped.append({"tool": "inspect_dependency_health", "when": condition})
+        assert report.get("skipped_checks", []) == skipped
         if automatic:
             assert report["planned_checks"][1] == {
                 "tool": "inspect_service_log", "when": "always" if log_flag else "service_unhealthy", "count": 1,

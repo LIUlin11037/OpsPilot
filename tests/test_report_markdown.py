@@ -121,4 +121,5 @@ def test_markdown_supports_reports_saved_before_tool_call_sources(report_db: Pat
         assert r"| inspect\_queue | timeout | 12.000 |" in output
     else:
         assert "## Tool calls" not in output
+    assert "## Skipped checks" not in output
     assert "## Suggested read-only checks" not in output

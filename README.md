@@ -95,6 +95,8 @@ python -m venv .venv
 
 正式诊断会把计划中的目标范围和检查写入报告的 `planned_scope` 与 `planned_checks`。HTTP 和队列流程的计划会列出每项检查配置的 `sources`。用 `report TASK_ID --format markdown` 回看时，可以按来源对照配置次数和实际调用次数。实际调用即使超时或返回不可用，也计入记录，具体结果见 `tool_calls`。
 
+HTTP 和 RabbitMQ 诊断会在 `skipped_checks` 中列出因触发条件未满足而跳过的已配置检查，Markdown 会显示对应的 `Skipped checks` 小节。例如，队列没有观测到待投递或待确认消息时，按队列活动触发的检查会记为跳过。队列数据缺失或超时的细节仍保留在队列证据里。
+
 ### 本地故障与恢复演示
 
 在仓库根目录运行以下命令，演示会启动一个只监听本机的模拟服务，先生成故障报告，再切换到恢复状态生成复查报告。

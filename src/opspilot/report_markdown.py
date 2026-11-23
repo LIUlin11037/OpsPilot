@@ -336,6 +336,16 @@ def render_markdown(report: StoredReport) -> str:
     if report.get("planned_checks"):
         lines.extend(_planned_check_lines(report["planned_checks"], calls))
 
+    if report.get("skipped_checks"):
+        lines.extend([
+            "", "## Skipped checks", "",
+            "| Tool | Unmet condition |",
+            "| --- | --- |",
+        ])
+        for check in report["skipped_checks"]:
+            condition = _PLAN_CONDITIONS.get(check["when"], check["when"])
+            lines.append(f"| {_value(check['tool'])} | {_value(condition)} |")
+
     if calls:
         has_sources = any("source" in call for call in calls)
         source_header = "Source | " if has_sources else ""

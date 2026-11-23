@@ -151,17 +151,25 @@ class ToolCall(_ToolCallFields, total=False):
     source: str
 
 
+CheckCondition = Literal[
+    "service_unhealthy", "service_unhealthy_or_unknown",
+    "service_unhealthy_or_unknown_or_log_errors", "queue_activity",
+]
+
+
 class _PlannedCheckFields(TypedDict):
     tool: ToolName
-    when: Literal[
-        "always", "service_unhealthy", "service_unhealthy_or_unknown",
-        "service_unhealthy_or_unknown_or_log_errors", "queue_activity",
-    ]
+    when: Literal["always"] | CheckCondition
     count: int
 
 
 class PlannedCheck(_PlannedCheckFields, total=False):
     sources: list[str]
+
+
+class SkippedCheck(TypedDict):
+    tool: ToolName
+    when: CheckCondition
 
 
 class QueueTool(Protocol):
@@ -254,6 +262,7 @@ class DiagnosisRoute(DiagnosisRouteFields, total=False):
 
 class DiagnosisReport(DiagnosisReportFields, total=False):
     tool_calls: list[ToolCall]
+    skipped_checks: list[SkippedCheck]
     requested_message_id: str
     target_trace: TargetTraceSummary
     next_checks: list[NextCheck]
@@ -319,6 +328,7 @@ class DiagnosisState(DiagnosisInput, total=False):
     consumer: ConsumerEvidence | UnavailableEvidence
     consumer_health: HealthEvidence
     processing: ProcessingRead
+    queue_activity_checks: list[ToolName]
     tool_calls: Annotated[list[ToolCall], add]
     report: DiagnosisReport
 
@@ -497,6 +507,13 @@ def _write_report(state: DiagnosisState) -> dict[str, DiagnosisReport]:
         report["evidence"].append(state["consumer_health"])
     if processing is not None:
         report["evidence"].append(processing)
+    called_tools = {call["tool"] for call in state["tool_calls"]}
+    skipped: list[SkippedCheck] = [
+        {"tool": tool, "when": "queue_activity"}
+        for tool in state.get("queue_activity_checks", []) if tool not in called_tools
+    ]
+    if skipped:
+        report["skipped_checks"] = skipped
     report["next_checks"] = suggest_next_checks(report["evidence"])
     return {"report": report}
 
@@ -563,13 +580,16 @@ def run_queue_diagnosis(
         raise ValueError("An explicit consumer health check requires a configured endpoint.")
 
     graph = _queue_graph(tool)
-    state: DiagnosisState = {"question": question}
+    activity_checks: list[ToolName] = []
+    state: DiagnosisState = {"question": question, "queue_activity_checks": activity_checks}
     processing_step = "report"
     if processing_tool is not None:
         inspect_processing = processing_tool.inspect_processing
         if message_id is not None:
             state["requested_message_id"] = message_id
             inspect_processing = partial(inspect_processing, message_id=message_id)
+        else:
+            activity_checks.append("inspect_processing")
         _add_processing_node(graph, inspect_processing)
         processing_step = "inspect_processing"
 
@@ -589,6 +609,8 @@ def run_queue_diagnosis(
         active_step = "inspect_consumer_endpoint"
         if check_consumer_health:
             inactive_step = active_step
+        else:
+            activity_checks.insert(0, "inspect_consumer_endpoint")
 
     if active_step == inactive_step:
         graph.add_edge("inspect_queue", active_step)

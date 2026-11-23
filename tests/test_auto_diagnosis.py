@@ -116,6 +116,15 @@ def test_auto_diagnosis_tracks_each_dependency_of_a_healthy_service(processing_s
         assert [item["http_status"] for item in report["evidence"]] == ([204, 503, 503, 204] if force_dependencies else [204])
         markdown = _cli(directory, "report", report["task_id"], "--format", "markdown")
         assert markdown.returncode == 0, markdown.stderr
+        if force_dependencies:
+            assert "skipped_checks" not in report
+            assert "## Skipped checks" not in markdown.stdout
+        else:
+            assert report["skipped_checks"] == [
+                {"tool": "inspect_dependency_health", "when": "service_unhealthy_or_unknown"},
+            ]
+            assert "## Skipped checks" in markdown.stdout
+            assert r"| inspect\_dependency\_health | Service unhealthy or unknown |" in markdown.stdout
         condition = "Always" if force_dependencies else "Service unhealthy or unknown"
         recorded = 2 if force_dependencies else 0
         assert fr"| inspect\_dependency\_health | {base}/dependency | {condition} | 2 | {recorded} |" in markdown.stdout
@@ -398,6 +407,7 @@ def test_auto_plan_rejects_embedded_credentials_before_showing_sources(endpoint_
     [
         (3, 0, "processing_url", False), (None, 2, "processing_record", False),
         (0, 0, "processing_url", False), (0, 0, "processing_url", True),
+        (None, 0, "processing_record", False),
     ],
 )
 def test_target_queue_checks_follow_each_configured_condition(
@@ -462,7 +472,7 @@ def test_target_queue_checks_follow_each_configured_condition(
         },
         {"tool": "inspect_processing", "when": "queue_activity", "count": 1, "sources": [record_source]},
     ]
-    expected_calls = 0 if pending == 0 and unacknowledged == 0 else 1
+    expected_calls = int((pending or 0) > 0 or unacknowledged > 0)
     assert "## Planned checks" in markdown.stdout
     assert fr"| inspect\_queue | {base}{queue_path} | Always | 1 | 1 |" in markdown.stdout
     for tool in ("inspect_consumer_endpoint", "inspect_processing"):
@@ -474,17 +484,27 @@ def test_target_queue_checks_follow_each_configured_condition(
             and line.endswith(f" | {condition} | 1 | {1 if forced else expected_calls} |")
             for line in markdown.stdout.splitlines()
         )
-    if pending == 0 and unacknowledged == 0:
+    if not expected_calls:
         expected_paths = [queue_path]
         expected_tools = ["inspect_queue"]
+        expected_skips = [{"tool": "inspect_processing", "when": "queue_activity"}]
         if force_consumer:
             expected_paths.append("/consumer-health")
             expected_tools.append("inspect_consumer_endpoint")
             assert report["evidence"][1]["health"] == "unhealthy"
+        else:
+            expected_skips.insert(0, {"tool": "inspect_consumer_endpoint", "when": "queue_activity"})
+        assert report["skipped_checks"] == expected_skips
+        assert "## Skipped checks" in markdown.stdout
+        assert r"| inspect\_processing | Pending or unacknowledged messages observed |" in markdown.stdout
+        if pending is None:
+            assert report["status"] == "undetermined"
+            assert report["evidence"][0]["reason"] == "metric_missing"
         assert requests == expected_paths
         assert [call["tool"] for call in report["tool_calls"]] == expected_tools
         return
 
+    assert "skipped_checks" not in report
     queue, health, processing = report["evidence"]
     assert queue["unacknowledged_messages"] == unacknowledged
     assert health["tool"] == "inspect_consumer_endpoint" and health["http_status"] == consumer_status

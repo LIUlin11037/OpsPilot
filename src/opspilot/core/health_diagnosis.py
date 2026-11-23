@@ -14,6 +14,7 @@ from opspilot.core.diagnosis import (
     HealthTool,
     ServiceLogEvidence,
     ServiceLogRead,
+    SkippedCheck,
     ToolCall,
     measure_tool_call,
     read_health,
@@ -85,7 +86,9 @@ def _after_log(
     return "report"
 
 
-def _write_report(state: _HealthState) -> _HealthState:
+def _write_report(
+    state: _HealthState, *, conditional_log: bool, conditional_dependencies: bool,
+) -> _HealthState:
     service = state["service"]
     dependencies = state.get("dependencies", [])
     evidence: list[Evidence] = [service]
@@ -110,7 +113,7 @@ def _write_report(state: _HealthState) -> _HealthState:
     healthy = endpoints_healthy and logs_clear
     if not healthy:
         summary.append("The cause is undetermined.")
-    return {"report": {
+    report: DiagnosisReport = {
         "question": state["question"],
         "status": "no_failure_observed" if healthy else "undetermined",
         "conclusion": " ".join(summary),
@@ -118,7 +121,21 @@ def _write_report(state: _HealthState) -> _HealthState:
         "evidence": evidence,
         "tool_calls": state["tool_calls"],
         "next_checks": suggest_next_checks(evidence),
-    }}
+    }
+    skipped: list[SkippedCheck] = []
+    if conditional_log and service_log is None:
+        skipped.append({"tool": "inspect_service_log", "when": "service_unhealthy"})
+    if conditional_dependencies and "dependencies" not in state:
+        skipped.append({
+            "tool": "inspect_dependency_health",
+            "when": (
+                "service_unhealthy_or_unknown_or_log_errors" if service_log is not None
+                else "service_unhealthy_or_unknown"
+            ),
+        })
+    if skipped:
+        report["skipped_checks"] = skipped
+    return {"report": report}
 
 
 def run_health_diagnosis(
@@ -140,7 +157,10 @@ def run_health_diagnosis(
 
     graph = StateGraph(_HealthState)
     graph.add_node("check_service", partial(_check_service, service))
-    graph.add_node("report", _write_report)
+    graph.add_node("report", partial(
+        _write_report, conditional_log=service_log is not None and not check_service_log,
+        conditional_dependencies=bool(dependency_tools) and not check_dependencies,
+    ))
     graph.add_edge(START, "check_service")
     graph.add_edge("report", END)
     routes = {"report": "report"}
