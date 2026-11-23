@@ -8,6 +8,7 @@ from html import escape
 from opspilot.core.diagnosis import PlannedCheck, ToolCall
 from opspilot.report_comparison import (
     EndpointChange,
+    EndpointIssue,
     HealthComparison,
     QueueComparison,
     VotingComparison,
@@ -115,6 +116,22 @@ def _endpoint_change_lines(changes: list[EndpointChange]) -> list[str]:
     return lines
 
 
+def _endpoint_issue_lines(issues: list[EndpointIssue]) -> list[str]:
+    if not issues:
+        return []
+    lines = [
+        "", "## Unchanged endpoint issues", "",
+        "| Role | Endpoint | Occurrence | Observation in both reports |",
+        "| --- | --- | ---: | --- |",
+    ]
+    for issue in issues:
+        lines.append(
+            f"| {issue['role'].capitalize()} | {_value(issue['source'])} | {issue['occurrence']} | "
+            f"{_comparison_observation(issue['observation'])} |"
+        )
+    return lines
+
+
 def render_voting_comparison_markdown(comparison: VotingComparison) -> str:
     target = comparison["target"]
     lines = [
@@ -163,6 +180,7 @@ def render_queue_comparison_markdown(comparison: QueueComparison) -> str:
     if "consumer_health_changes" in comparison:
         lines.extend(["", "## Consumer endpoint changes", ""])
         lines.extend(_endpoint_change_lines(comparison["consumer_health_changes"]))
+    lines.extend(_endpoint_issue_lines(comparison.get("unchanged_endpoint_issues", [])))
     return "\n".join(lines) + "\n"
 
 
@@ -178,17 +196,7 @@ def render_health_comparison_markdown(comparison: HealthComparison) -> str:
         "",
     ]
     lines.extend(_endpoint_change_lines(comparison["changes"]))
-    if "unchanged_endpoint_issues" in comparison:
-        lines.extend([
-            "", "## Unchanged endpoint issues", "",
-            "| Role | Endpoint | Occurrence | Observation in both reports |",
-            "| --- | --- | ---: | --- |",
-        ])
-        for issue in comparison["unchanged_endpoint_issues"]:
-            lines.append(
-                f"| {issue['role'].capitalize()} | {_value(issue['source'])} | {issue['occurrence']} | "
-                f"{_comparison_observation(issue['observation'])} |"
-            )
+    lines.extend(_endpoint_issue_lines(comparison.get("unchanged_endpoint_issues", [])))
     if "service_log_changes" in comparison:
         lines.extend(["", "## Service log changes", ""])
         changes = comparison["service_log_changes"]

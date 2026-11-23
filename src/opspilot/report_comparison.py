@@ -87,6 +87,7 @@ class QueueComparisonFields(TypedDict):
 
 class QueueComparison(QueueComparisonFields, total=False):
     consumer_health_changes: list[EndpointChange]
+    unchanged_endpoint_issues: list[EndpointIssue]
 
 
 class ServiceLogObservation(TypedDict):
@@ -251,10 +252,12 @@ def compare_queue_reports(
         "changes": _changed_fields(before_values, after_values),
     }
     if include_consumer_health:
-        comparison["consumer_health_changes"] = _endpoint_changes(
-            _endpoint_observations(before["evidence"], _CONSUMER_HEALTH_ROLES),
-            _endpoint_observations(after["evidence"], _CONSUMER_HEALTH_ROLES),
-        )
+        before_consumers = _endpoint_observations(before["evidence"], _CONSUMER_HEALTH_ROLES)
+        after_consumers = _endpoint_observations(after["evidence"], _CONSUMER_HEALTH_ROLES)
+        comparison["consumer_health_changes"] = _endpoint_changes(before_consumers, after_consumers)
+        issues = _unchanged_endpoint_issues(before_consumers, after_consumers)
+        if issues:
+            comparison["unchanged_endpoint_issues"] = issues
     return comparison
 
 
@@ -303,6 +306,14 @@ def _endpoint_changes(before: EndpointObservations, after: EndpointObservations)
                 "before": previous, "after": current,
             })
     return changes
+
+
+def _unchanged_endpoint_issues(before: EndpointObservations, after: EndpointObservations) -> list[EndpointIssue]:
+    return [
+        {"role": role, "source": source, "occurrence": occurrence, "observation": observation}
+        for (role, source, occurrence), observation in after.items()
+        if observation["health"] != "healthy" and before.get((role, source, occurrence)) == observation
+    ]
 
 
 def _service_logs(evidence: list[Evidence]) -> dict[str, ServiceLogObservation]:
@@ -357,13 +368,9 @@ def compare_health_reports(
         "service_url": service,
         "changes": _endpoint_changes(before_values, after_values),
     }
-    unchanged_endpoint_issues: list[EndpointIssue] = [
-        {"role": role, "source": source, "occurrence": occurrence, "observation": observation}
-        for (role, source, occurrence), observation in after_values.items()
-        if observation["health"] != "healthy" and before_values.get((role, source, occurrence)) == observation
-    ]
-    if unchanged_endpoint_issues:
-        comparison["unchanged_endpoint_issues"] = unchanged_endpoint_issues
+    issues = _unchanged_endpoint_issues(before_values, after_values)
+    if issues:
+        comparison["unchanged_endpoint_issues"] = issues
     if include_service_log:
         comparison["service_log_changes"] = _service_log_changes(before["evidence"], after["evidence"])
     return comparison

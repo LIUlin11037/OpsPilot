@@ -141,6 +141,44 @@ def test_queue_comparison_markdown_describes_unchanged_observations(saved_queue_
     assert "No changes in recorded endpoint observations." in markdown
 
 
+def test_compare_queue_highlights_a_consumer_still_unhealthy_after_backlog_clears(saved_queue_pair) -> None:
+    database, before, _ = saved_queue_pair
+    queue, consumer = before["evidence"]
+    healthy_consumer: HealthEvidence = {
+        "tool": "inspect_consumer_endpoint", "source": CONSUMER_URL + "/healthy",
+        "observed_at": "2026-11-20T06:00:02+00:00", "outcome": "observed", "health": "healthy", "http_status": 204,
+    }
+    before = save_report(database, {**before, "evidence": [queue, consumer, healthy_consumer]})
+    after = save_report(database, {
+        **before, "status": "no_backlog_observed", "evidence": [
+            {**queue, "pending_messages": 0, "unacknowledged_messages": 0},
+            {**consumer, "observed_at": "2026-11-20T06:06:01+00:00"}, healthy_consumer,
+        ],
+    })
+    original = database.read_bytes()
+
+    result = _compare(database, "compare-queue-latest", "--queue-source", QUEUE_SOURCE, "--include-consumer-health")
+    assert result.returncode == 0, result.stderr
+    comparison = json.loads(result.stdout)
+    assert comparison["before_task_id"] == before["task_id"] and comparison["after_task_id"] == after["task_id"]
+    assert {"field": "queue.pending_messages", "before": 6, "after": 0} in comparison["changes"]
+    assert comparison["consumer_health_changes"] == []
+    assert comparison["unchanged_endpoint_issues"] == [{
+        "role": "consumer", "source": CONSUMER_URL, "occurrence": 1,
+        "observation": {"health": "unhealthy", "outcome": "observed", "http_status": 503, "reason": None},
+    }]
+    assert "unchanged_endpoint_issues" not in compare_queue_reports(before, after)
+
+    markdown = _compare(
+        database, "compare-queue", before["task_id"], after["task_id"], "--include-consumer-health", "--format", "markdown",
+    )
+    assert markdown.returncode == 0, markdown.stderr
+    assert "| Pending messages | 6 | 0 |" in markdown.stdout
+    assert "## Unchanged endpoint issues" in markdown.stdout
+    assert f"| Consumer | {CONSUMER_URL} | 1 | Outcome observed, Health unhealthy, HTTP status 503 |" in markdown.stdout
+    assert database.read_bytes() == original
+
+
 @pytest.mark.parametrize("source", [CONSUMER_URL, CONSUMER_URL + "/replacement"])
 def test_compare_queue_matches_consumer_checks_by_source(saved_queue_pair, source: str) -> None:
     _, before, after = saved_queue_pair

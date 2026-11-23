@@ -284,7 +284,7 @@ $queueSource = "http://127.0.0.1:15672/api/queues/%2F/orders"
 
 `changes` 列出发生变化的队列指标和读取结果。计数为 `0` 表示实际观测到零，`null` 表示当次读不到该指标。待投递数缺失时，报告中仍有有效值的待确认数和消费者注册数也会参与对比。
 
-加上 `--include-consumer-health`，输出会同时包含 `consumer_health_changes`。对比按消费者端点 URL 匹配，列出健康状态、HTTP 状态码或读取结果的变化。若某次报告缺少对应端点观测，该侧显示 `null`，例如队列清空后跳过了健康检查。
+加上 `--include-consumer-health`，输出会同时包含 `consumer_health_changes`。对比按消费者端点 URL 匹配，列出健康状态、HTTP 状态码或读取结果的变化。若某次报告缺少对应端点观测，该侧显示 `null`，例如队列清空后跳过了健康检查。两份报告都记录到相同的消费者异常或未知状态时，会在 Markdown 的 `Unchanged endpoint issues` 小节和 JSON 的 `unchanged_endpoint_issues` 字段列出对应端点。
 
 默认输出 JSON。加上 `--format markdown` 可按表格查看变化。不可用的队列指标显示为 `Unavailable`，缺少的端点观测显示为 `No observation recorded`。
 
