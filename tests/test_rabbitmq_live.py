@@ -259,6 +259,9 @@ def test_live_queue_lifecycle(
             assert drained["status"] == "no_backlog_observed"
             assert len(drained["evidence"]) == 1
             assert _snapshot(drained["evidence"][0]) == (0, 0, 1)
+            assert drained["skipped_checks"] == [{
+                "tool": "inspect_consumer_endpoint", "when": "queue_activity", "source": health_url,
+            }]
             assert health_requests == ["/health", "/health"]
             compared = _run_cli(
                 directory, "compare-queue", delivered["task_id"], drained["task_id"],
@@ -267,6 +270,7 @@ def test_live_queue_lifecycle(
             assert compared["queue_source"] == queue_evidence["source"]
             skipped, = compared["consumer_health_changes"]
             assert skipped["source"] == health_url and skipped["after"] is None
+            assert skipped["after_skipped_when"] == "queue_activity"
             changes = {
                 change["field"]: (change["before"], change["after"])
                 for change in compared["changes"]
