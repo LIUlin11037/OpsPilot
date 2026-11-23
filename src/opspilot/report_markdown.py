@@ -20,6 +20,7 @@ _ROUTE_BASES = {
     "message_id": "Requested message ID",
     "delivery_id": "Requested delivery ID",
     "voter_id": "Requested voter ID",
+    "entity_id": "Requested entity ID",
     "workflow": "Explicit workflow",
     "check_consumer_health": "--check-consumer-health",
     "check_dependencies": "--check-dependencies",
@@ -33,6 +34,8 @@ _SCOPE_LABELS = {
     "message_id": "Message ID",
     "delivery_id": "Delivery ID",
     "voter_id": "Voter ID",
+    "entity_id": "Entity ID",
+    "environment": "Environment",
     "snapshot_source": "Snapshot source",
 }
 _PLAN_CONDITIONS = {

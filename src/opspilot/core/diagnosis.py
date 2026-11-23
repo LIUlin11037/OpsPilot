@@ -261,7 +261,7 @@ class DiagnosisRouteFields(TypedDict):
 
 
 class DiagnosisRoute(DiagnosisRouteFields, total=False):
-    selected_by: Literal["message_id", "delivery_id", "voter_id", "workflow"] | RequestedCheck
+    selected_by: Literal["message_id", "delivery_id", "voter_id", "entity_id", "workflow"] | RequestedCheck
 
 
 class DiagnosisReport(DiagnosisReportFields, total=False):

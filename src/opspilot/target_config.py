@@ -19,11 +19,20 @@ class RabbitMQTargetConfig:
 
 
 @dataclass(frozen=True)
+class OrderTargetConfig:
+    environment: str
+    orders_db: Path
+    inventory_db: Path
+    shipping_db: Path
+
+
+@dataclass(frozen=True)
 class TargetConfig:
     health: HealthConfig | None = None
     rabbitmq: RabbitMQTargetConfig | None = None
     hirehub_snapshot: Path | None = None
     voting_snapshot: Path | None = None
+    order: OrderTargetConfig | None = None
 
 
 def _rabbitmq_string(data: dict[str, object], field: str, default: str = "") -> str:
@@ -73,14 +82,36 @@ def _parse_snapshot(data: object, config_dir: Path, label: str) -> Path:
     return config_dir / snapshot
 
 
+def _parse_order(data: object, config_dir: Path) -> OrderTargetConfig:
+    if not isinstance(data, dict):
+        raise ValueError("order must be a JSON object.")
+    unsupported = data.keys() - {"environment", "orders_db", "inventory_db", "shipping_db"}
+    if unsupported:
+        names = ", ".join(repr(name) for name in sorted(unsupported))
+        raise ValueError(f"Order configuration contains unsupported fields: {names}.")
+
+    def required(field: str) -> str:
+        value = data.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"order.{field} must be a nonempty string.")
+        return value
+
+    return OrderTargetConfig(
+        environment=required("environment"),
+        orders_db=config_dir / required("orders_db"),
+        inventory_db=config_dir / required("inventory_db"),
+        shipping_db=config_dir / required("shipping_db"),
+    )
+
+
 def load_target_config(path: Path) -> TargetConfig:
     data = read_config_object(path, "Target")
-    unsupported = data.keys() - {"health", "rabbitmq", "hirehub", "voting"}
+    unsupported = data.keys() - {"health", "rabbitmq", "hirehub", "voting", "order"}
     if unsupported:
         names = ", ".join(repr(name) for name in sorted(unsupported))
         raise ValueError(f"Target configuration contains unsupported fields: {names}.")
     if not data:
-        raise ValueError("Target configuration requires a health, rabbitmq, hirehub, or voting section.")
+        raise ValueError("Target configuration requires a health, rabbitmq, hirehub, voting, or order section.")
     health = data.get("health")
     rabbitmq = data.get("rabbitmq")
     if "health" in data and not isinstance(health, dict):
@@ -93,4 +124,5 @@ def load_target_config(path: Path) -> TargetConfig:
         rabbitmq=_parse_rabbitmq(rabbitmq, config_dir) if isinstance(rabbitmq, dict) else None,
         hirehub_snapshot=_parse_snapshot(data["hirehub"], config_dir, "HireHub") if "hirehub" in data else None,
         voting_snapshot=_parse_snapshot(data["voting"], config_dir, "Voting") if "voting" in data else None,
+        order=_parse_order(data["order"], config_dir) if "order" in data else None,
     )

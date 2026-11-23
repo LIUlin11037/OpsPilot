@@ -17,9 +17,9 @@ python -m venv .venv
 
 ## 按故障描述选择诊断流程
 
-`diagnose-auto` 根据描述中的中英文症状词，在 HTTP 健康检查和 RabbitMQ 队列诊断之间选择一个已配置的流程。HTTP 流程使用配置的服务和依赖端点，队列流程使用指定的 Management API 和虚拟主机。命令只调用选中的流程，并在报告的 `routing` 记录流程名称和匹配词。
+`diagnose-auto` 根据描述中的中英文症状词，在 HTTP 健康检查和 RabbitMQ 队列诊断之间选择一个已配置的流程。HTTP 流程使用配置的服务和依赖端点，队列流程使用指定的 Management API 和虚拟主机。命令只调用选中的流程，并在报告的 `routing` 记录流程名称和匹配词。业务追踪可以用精确 ID 选择对应的流程。
 
-把常用目标保存为 UTF-8 的 `target.json`。可以按需配置 `health`、`rabbitmq`、`hirehub` 和 `voting`。`health` 使用 HTTP 健康配置字段，`rabbitmq` 需要管理地址与队列名，虚拟主机默认为 `/`，超时默认为 5 秒。RabbitMQ 和 MySQL 凭据通过环境变量提供。
+把常用目标保存为 UTF-8 的 `target.json`。可以按需配置 `health`、`rabbitmq`、`hirehub`、`voting` 和 `order`。`health` 使用 HTTP 健康配置字段，`rabbitmq` 需要管理地址与队列名，虚拟主机默认为 `/`，超时默认为 5 秒。RabbitMQ 和 MySQL 凭据通过环境变量提供。
 
 ```json
 {
@@ -70,6 +70,8 @@ python -m venv .venv
 ```powershell
 .\.venv\Scripts\python.exe -m opspilot diagnose-auto --config .\target.json --voter-id 4a1c09a9dbcf77a "投票是否已处理？"
 ```
+
+订单履约可以用 `--order-id` 追踪。目标配置的 `order` 段提供订单、库存和发货的只读 SQLite 来源，`--plan` 会列出三个检查点及地址。[订单履约示例和验收](docs/v0.3-order-fulfillment.md)
 
 临时排查也可以直接提供连接选项。
 

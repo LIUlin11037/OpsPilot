@@ -15,6 +15,7 @@ from opspilot.adapters.hirehub_capture import HireHubLiveAdapter
 from opspilot.adapters.hirehub_snapshot import NOTIFICATION_QUEUE, HireHubSnapshotAdapter
 from opspilot.adapters.http_processing import HttpProcessingAdapter
 from opspilot.adapters.json_processing import JsonProcessingAdapter
+from opspilot.adapters.order_trace import OrderTraceAdapter
 from opspilot.adapters.simulated import SimulatedProcessingAdapter
 from opspilot.adapters.voting_snapshot import VotingSnapshotAdapter, parse_voter_id
 from opspilot.connectors.http_health import HttpHealthConnector
@@ -324,6 +325,13 @@ def _prepare_auto_diagnosis(
             raise ValueError(_VOTER_ID_ERROR)
         if args.config is None:
             raise ValueError("--voter-id requires --config with a voting snapshot")
+    if args.order_id is not None:
+        if not args.order_id.strip():
+            raise ValueError("--order-id must not be empty")
+        if args.workflow is not None:
+            raise ValueError("--order-id selects the order trace and cannot be combined with --workflow")
+        if args.config is None:
+            raise ValueError("--order-id requires --config with an order section")
     direct_options = (args.health_config, args.management_url, args.queue, args.vhost, args.timeout)
     if args.config is not None and any(value is not None for value in direct_options):
         raise ValueError("--config cannot be combined with direct target options")
@@ -343,12 +351,25 @@ def _prepare_auto_diagnosis(
             raise ValueError(f"--check-consumer-health cannot be combined with {health_option}")
         requested_check = "check_consumer_health"
 
-    if args.delivery_id is not None or voter_id is not None:
+    if args.delivery_id is not None or voter_id is not None or args.order_id is not None:
         if health_option is not None:
             raise ValueError(f"{health_option} requires the HTTP health workflow")
         if args.check_consumer_health:
             raise ValueError(_CONSUMER_HEALTH_WORKFLOW_REQUIRED)
         target = load_target_config(args.config)
+        if args.order_id is not None:
+            order = target.order
+            if order is None:
+                raise ValueError("--order-id requires an order section in --config")
+            adapter = OrderTraceAdapter(order.environment, order.orders_db, order.inventory_db, order.shipping_db)
+            order_plan: _AutoDiagnosisPlan = {
+                "question": question,
+                "routing": {"workflow": "target_trace", "matched_terms": [], "selected_by": "entity_id"},
+                "scope": {"entity_id": args.order_id, "environment": order.environment, **adapter.sources()},
+                "checks": [{"tool": "inspect_target_trace", "when": "always", "count": 1}],
+            }
+            return order_plan, partial(run_target_trace, question, args.order_id, adapter)
+
         selected_by: Literal["delivery_id", "voter_id"]
         if voter_id is not None:
             snapshot = target.voting_snapshot
@@ -560,7 +581,7 @@ def main() -> None:
     )
     health.add_argument("question", help="Incident description.")
     auto_diagnose = commands.add_parser(
-        "diagnose-auto", help="Choose a configured HTTP, RabbitMQ, or business snapshot workflow.",
+        "diagnose-auto", help="Choose a configured HTTP, RabbitMQ, or business trace workflow.",
     )
     auto_diagnose.add_argument("--config", type=Path, help="JSON file with workflows for a target.")
     auto_diagnose.add_argument("--health-config", type=Path, help="JSON file with health endpoints.")
@@ -574,6 +595,7 @@ def main() -> None:
     auto_scope.add_argument("--message-id", help="Look up an exact message in the configured processing source.")
     auto_scope.add_argument("--delivery-id", type=int, help="Trace a delivery in the configured HireHub snapshot.")
     auto_scope.add_argument("--voter-id", help="Trace a voter in the configured voting snapshot.")
+    auto_scope.add_argument("--order-id", help="Trace an exact order ID in the configured fulfillment databases.")
     auto_diagnose.add_argument("question", help="Incident description.")
     for health_parser in (health, auto_diagnose):
         health_parser.add_argument(

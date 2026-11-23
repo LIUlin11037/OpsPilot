@@ -1,0 +1,8 @@
+{
+  "order": {
+    "environment": "fulfillment-demo",
+    "orders_db": "orders.sqlite3",
+    "inventory_db": "inventory.sqlite3",
+    "shipping_db": "shipping.sqlite3"
+  }
+}
