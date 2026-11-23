@@ -298,6 +298,13 @@ $queueSource = "http://127.0.0.1:15672/api/queues/%2F/orders"
 .\.venv\Scripts\python.exe -m opspilot compare-queue "BEFORE_TASK_ID" "AFTER_TASK_ID" --include-processing --format markdown
 ```
 
+日常复查可以用 `--message-id` 按原值筛选已保存的报告。搭配 `--queue-source` 可限定队列。最近两份匹配报告的处理记录来源必须一致，命令会同时对比队列指标和消息处理结果。如果两次诊断使用了不同来源，可按任务 ID 选取同一来源的报告。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot reports --queue-source $queueSource --message-id "order-msg-101" --limit 2
+.\.venv\Scripts\python.exe -m opspilot compare-queue-latest --queue-source $queueSource --message-id "order-msg-101" --format markdown
+```
+
 ### 查看消费者端点健康
 
 已知消费者的 HTTP 健康端点时，可在 RabbitMQ 模式加上 `--consumer-health-url`。观察到待投递或待确认消息时，OpsPilot 发送只读 GET，记录端点健康状态、观测时间和耗时。待投递数缺失时，已观测到的待确认消息也能触发检查。健康状态说明该端点当时的响应，积压原因仍需结合队列和业务证据核查。

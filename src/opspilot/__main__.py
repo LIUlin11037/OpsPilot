@@ -214,6 +214,11 @@ def _latest_comparison_task_ids(
             parser.error("--queue-source must not be empty")
         filters = {"queue_source": args.queue_source}
         scope = "queue reports for the requested queue source"
+        if args.message_id is not None:
+            if not args.message_id.strip():
+                parser.error("--message-id must not be empty")
+            filters["message_id"] = args.message_id
+            scope += " and message ID"
     with _report_storage_errors(parser):
         reports = list_reports(args.db, limit=2, **filters)
     if len(reports) < 2:
@@ -583,6 +588,7 @@ def main() -> None:
     report_ids = reports_command.add_mutually_exclusive_group()
     report_ids.add_argument("--delivery-id", type=int, help="Match a HireHub delivery ID.")
     report_ids.add_argument("--voter-id", help="Match the exact Example Voting App voter ID.")
+    report_ids.add_argument("--message-id", help="Match the exact message ID requested in a queue diagnosis.")
     reports_command.add_argument("--environment", help="Match the exact target environment label.")
     reports_command.add_argument("--service-url", help="Match the exact main service health URL.")
     reports_command.add_argument("--queue-source", help="Match the exact queue evidence source.")
@@ -625,6 +631,9 @@ def main() -> None:
     )
     report_comparisons["compare-queue-latest"].add_argument(
         "--queue-source", required=True, help="Match the exact queue evidence source."
+    )
+    report_comparisons["compare-queue-latest"].add_argument(
+        "--message-id", help="Match the exact requested message ID and compare its processing observations."
     )
     report_comparisons["compare-voting-latest"].add_argument(
         "--voter-id", required=True, help="Match the exact Example Voting App voter ID."
@@ -686,6 +695,8 @@ def main() -> None:
                 reports_command.error("--delivery-id must be positive")
             if args.voter_id is not None and parse_voter_id(args.voter_id) is None:
                 reports_command.error(_VOTER_ID_ERROR)
+            if args.message_id is not None and not args.message_id.strip():
+                reports_command.error("--message-id must not be empty")
             environment = args.environment
             if environment is not None and not environment.strip():
                 reports_command.error("--environment must not be empty")
@@ -697,6 +708,7 @@ def main() -> None:
                 summaries = list_reports(
                     args.db, limit=args.limit, delivery_id=args.delivery_id, environment=environment,
                     service_url=args.service_url, queue_source=args.queue_source, voter_id=args.voter_id,
+                    message_id=args.message_id,
                 )
             print(json.dumps(summaries, indent=2))
             return
@@ -719,7 +731,9 @@ def main() -> None:
                 elif args.command in queue_comparisons:
                     comparison = compare_queue_reports(
                         before, after, include_consumer_health=args.include_consumer_health,
-                        include_processing=getattr(args, "include_processing", False),
+                        include_processing=(
+                            args.include_processing if args.command == "compare-queue" else args.message_id is not None
+                        ),
                     )
                     if args.format == "markdown":
                         markdown = render_queue_comparison_markdown(comparison)

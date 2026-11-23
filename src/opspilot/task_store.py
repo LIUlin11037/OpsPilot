@@ -25,6 +25,7 @@ class ReportSummary(ReportSummaryFields, total=False):
     target_trace: TargetTraceSummary
     service_url: str
     queue_source: str
+    requested_message_id: str
 
 
 def _open_read_only(database: Path) -> sqlite3.Connection:
@@ -67,13 +68,13 @@ def load_report(database: Path, task_id: str) -> StoredReport | None:
 def list_reports(
     database: Path, *, limit: int, delivery_id: int | None = None,
     environment: str | None = None, service_url: str | None = None, queue_source: str | None = None,
-    voter_id: str | None = None,
+    voter_id: str | None = None, message_id: str | None = None,
 ) -> list[ReportSummary]:
     if not database.exists():
         return []
 
     filter_trace = delivery_id is not None or voter_id is not None or environment is not None
-    has_filters = filter_trace or service_url is not None or queue_source is not None
+    has_filters = filter_trace or service_url is not None or queue_source is not None or message_id is not None
     summaries: list[ReportSummary] = []
     with closing(_open_read_only(database)) as connection:
         # The original report table has a rowid and no save timestamp.
@@ -84,6 +85,8 @@ def list_reports(
         )
         for task_id, payload in rows:
             report: DiagnosisReport = json.loads(payload)
+            if message_id is not None and report.get("requested_message_id") != message_id:
+                continue
             summary: ReportSummary = {
                 "task_id": task_id, "question": report["question"], "status": report["status"],
             }
@@ -110,6 +113,8 @@ def list_reports(
                 ):
                     continue
                 summary["queue_source"] = queue_source
+            if message_id is not None:
+                summary["requested_message_id"] = message_id
             summaries.append(summary)
             if len(summaries) == limit:
                 break

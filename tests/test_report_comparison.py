@@ -235,8 +235,8 @@ def test_compare_queue_shows_processing_recovery_for_one_message(
 
 
 @pytest.fixture
-def message_observations(saved_queue_pair) -> tuple[StoredReport, StoredReport]:
-    _, before, after = saved_queue_pair
+def message_observations(saved_queue_pair) -> tuple[Path, StoredReport, StoredReport]:
+    database, before, after = saved_queue_pair
     observation = {
         "tool": "inspect_processing", "source": "file:///fixtures/processing.json",
         "observed_at": "2026-11-20T06:00:00+00:00",
@@ -248,11 +248,11 @@ def message_observations(saved_queue_pair) -> tuple[StoredReport, StoredReport]:
     after["evidence"].append({
         **observation, "outcome": "timeout", "reason": "request_timeout",
     })
-    return before, after
+    return database, before, after
 
 
 def test_compare_queue_distinguishes_zero_matches_from_processing_timeout(message_observations) -> None:
-    before, after = message_observations
+    _, before, after = message_observations
 
     assert "message_processing" not in compare_queue_reports(before, after)
     comparison = compare_queue_reports(before, after, include_processing=True)
@@ -272,7 +272,7 @@ def test_compare_queue_distinguishes_zero_matches_from_processing_timeout(messag
 
 
 def test_compare_queue_requires_exact_processing_scope(message_observations) -> None:
-    before, after = message_observations
+    _, before, after = message_observations
     after.pop("requested_message_id")
     with pytest.raises(ValueError, match="same exact message ID"):
         compare_queue_reports(before, after, include_processing=True)
@@ -368,6 +368,73 @@ def test_compare_queue_latest_requires_two_reports_for_the_selected_queue(saved_
 
     assert result.returncode == 1
     assert "fewer than two saved queue reports" in result.stderr
+    assert result.stdout == ""
+
+
+def test_queue_message_history_selects_the_latest_exact_matches(message_observations) -> None:
+    database, before, after = message_observations
+    message_id = before["requested_message_id"]
+    save_report(database, {**before, "question": "Older message check"})
+    baseline = save_report(database, before)
+    save_report(database, {**after, "requested_message_id": "msg-01"})
+    followup = save_report(database, after)
+    other_queue = deepcopy(after)
+    other_queue["evidence"][0]["source"] = QUEUE_SOURCE.replace("%2F", "other-vhost")
+    save_report(database, other_queue)
+    incidental_match = deepcopy(before)
+    incidental_match.pop("requested_message_id")
+    incidental_match["evidence"][-1] = {
+        "tool": "inspect_processing", "source": before["evidence"][-1]["source"],
+        "observed_at": before["evidence"][-1]["observed_at"], "outcome": "observed",
+        "message_id": message_id, "result": "succeeded",
+    }
+    save_report(database, incidental_match)
+    original = database.read_bytes()
+
+    options = ("--queue-source", QUEUE_SOURCE, "--message-id", message_id)
+    history = _compare(database, "reports", *options, "--limit", "2")
+    assert history.returncode == 0, history.stderr
+    assert [
+        (row["task_id"], row["queue_source"], row["requested_message_id"])
+        for row in json.loads(history.stdout)
+    ] == [(followup["task_id"], QUEUE_SOURCE, message_id), (baseline["task_id"], QUEUE_SOURCE, message_id)]
+
+    result = _compare(database, "compare-queue-latest", *options, "--include-consumer-health")
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == compare_queue_reports(
+        baseline, followup, include_processing=True, include_consumer_health=True,
+    )
+    assert database.read_bytes() == original
+
+
+def test_compare_queue_latest_requires_two_reports_for_the_message(message_observations) -> None:
+    database, before, _ = message_observations
+    save_report(database, before)
+
+    result = _compare(
+        database, "compare-queue-latest", "--queue-source", QUEUE_SOURCE,
+        "--message-id", before["requested_message_id"],
+    )
+
+    assert result.returncode == 1
+    assert "fewer than two saved queue reports for the requested queue source and message ID" in result.stderr
+    assert result.stdout == ""
+
+
+def test_compare_queue_latest_rejects_different_processing_sources(message_observations) -> None:
+    database, before, after = message_observations
+    save_report(database, before)
+    save_report(database, before)
+    after["evidence"][-1]["source"] = "file:///other/processing.json"
+    save_report(database, after)
+
+    result = _compare(
+        database, "compare-queue-latest", "--queue-source", QUEUE_SOURCE,
+        "--message-id", before["requested_message_id"],
+    )
+
+    assert result.returncode == 2
+    assert "must match on the processing evidence source" in result.stderr
     assert result.stdout == ""
 
 
