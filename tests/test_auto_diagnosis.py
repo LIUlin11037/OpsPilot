@@ -149,6 +149,10 @@ def test_auto_diagnosis_tracks_each_dependency_of_a_healthy_service(processing_s
          "Check backlog", "--check-dependencies requires the HTTP health workflow"),
         (["--check-consumer-health", "--workflow", "http_health"],
          "Check HTTP health", "--check-consumer-health requires the RabbitMQ queue workflow"),
+        (["--check-dependencies"], "Queue backlog", "--check-dependencies requires the HTTP health workflow"),
+        (["--check-consumer-health"], "HTTP health", "--check-consumer-health requires the RabbitMQ queue workflow"),
+        (["--check-consumer-health", "--check-dependencies"],
+         "Check again", "--check-consumer-health cannot be combined with --check-dependencies"),
         (["--check-consumer-health", "--management-url", "http://localhost", "--queue", "orders"],
          "Check backlog", "--check-consumer-health requires rabbitmq.consumer_health_url in --config"),
         (["--check-dependencies", "--config", "unused.json", "--delivery-id", "1001"],
@@ -233,6 +237,67 @@ def test_auto_explicit_workflow_limits_requests_and_is_recorded_in_report(
         assert "**Selection basis** Explicit workflow" in markdown.stdout
         assert "## Planned scope" in markdown.stdout
         assert report["planned_scope"][source_key] in markdown.stdout
+
+
+@pytest.mark.parametrize(
+    ("option", "question", "workflow", "terms", "tool", "expected_requests"),
+    [
+        ("--check-consumer-health", "复查消费者健康检查和队列积压", "queue",
+         ["消费者", "队列", "积压"], "inspect_consumer_endpoint",
+         ["/api/queues/%2F/orders", "/consumer-health"]),
+        ("--check-dependencies", "复查依赖", "http_health", [], "inspect_dependency_health",
+         ["/health", "/dependency"]),
+        ("--check-service-log", "队列积压，HTTP 5xx", "http_health", ["http", "5xx"], "inspect_service_log",
+         ["/health"]),
+    ],
+)
+def test_auto_diagnosis_uses_requested_checks_to_resolve_the_workflow(
+    processing_service, monkeypatch, option, question, workflow, terms, tool, expected_requests,
+) -> None:
+    def respond(path: str) -> tuple[int, bytes]:
+        if path == "/api/queues/%2F/orders":
+            return 200, b'{"messages_ready": 0, "messages_unacknowledged": 0, "consumers": 1}'
+        return (503 if path == "/consumer-health" else 204), b""
+
+    monkeypatch.setenv("OPSPILOT_RABBITMQ_USER", "test-reader")
+    monkeypatch.setenv("OPSPILOT_RABBITMQ_PASSWORD", "test-password")
+    with TemporaryDirectory(prefix="opspilot-requested-check-") as directory:
+        config = Path(directory) / "target.json"
+        (config.parent / "service.jsonl").write_text("", encoding="utf-8")
+        with processing_service(respond) as (endpoint, requests):
+            base = endpoint.removesuffix("/processing")
+            config.write_text(json.dumps({
+                "health": {
+                    "service_url": f"{base}/health", "dependency_urls": [f"{base}/dependency"],
+                    "service_log_path": "service.jsonl",
+                },
+                "rabbitmq": {
+                    "management_url": base, "queue": "orders", "consumer_health_url": f"{base}/consumer-health",
+                },
+            }), encoding="utf-8")
+            options = ("diagnose-auto", "--config", str(config), option, question)
+            preview = _cli(directory, *options, "--plan")
+            assert preview.returncode == 0, preview.stderr
+            assert requests == []
+            assert not (config.parent / ".opspilot").exists()
+            diagnosis = _cli(directory, *options)
+
+        assert diagnosis.returncode == 0, diagnosis.stderr
+        plan = json.loads(preview.stdout)
+        report = json.loads(diagnosis.stdout)
+        assert report["routing"] == plan["routing"] == {
+            "workflow": workflow, "matched_terms": terms,
+            "selected_by": option.removeprefix("--").replace("-", "_"),
+        }
+        assert report["planned_checks"] == plan["checks"]
+        check, = [check for check in plan["checks"] if check["tool"] == tool]
+        assert check["when"] == "always"
+        assert len(report["tool_calls"]) == 2
+        assert report["tool_calls"][1]["tool"] == tool
+        assert requests == expected_requests
+        markdown = _cli(directory, "report", report["task_id"], "--format", "markdown")
+        assert markdown.returncode == 0, markdown.stderr
+        assert f"**Selection basis** {option}" in markdown.stdout
 
 
 @pytest.mark.parametrize(

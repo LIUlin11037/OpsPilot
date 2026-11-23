@@ -75,10 +75,16 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m opspilot diagnose-auto --health-config .\health.json --management-url http://127.0.0.1:15672 --queue "orders" "RabbitMQ 队列积压"
 ```
 
-描述同时命中两类症状、没有命中或缺少所选流程的配置时，命令会提示补充。可以在同一份配置下用 `--workflow http_health` 或 `--workflow queue` 指定流程，报告会记录这次选择。选中的流程仍按观测证据决定后续检查。
+可以在同一份配置下用 `--workflow http_health` 或 `--workflow queue` 指定流程。普通诊断的描述同时命中两类症状或没有命中时，`--check-consumer-health` 可选定队列流程，`--check-dependencies` 或 `--check-service-log` 可选定 HTTP 流程。计划和保存的报告会记录用于选定流程的参数。描述只命中另一流程、复查选项互相冲突或所选流程缺少配置时，命令会提示调整。
 
 ```powershell
 .\.venv\Scripts\python.exe -m opspilot diagnose-auto --config .\target.json --workflow queue "接口返回 503，队列也有积压"
+```
+
+配置 `rabbitmq.consumer_health_url` 后，可以用下面的命令复查消费者。
+
+```powershell
+.\.venv\Scripts\python.exe -m opspilot diagnose-auto --config .\target.json --check-consumer-health "复查消费者健康检查和队列积压"
 ```
 
 使用 `--plan` 可预览选中的流程、查询范围和检查条件。查询范围包含主服务 URL、RabbitMQ 队列地址或快照来源。预览根据本地配置生成 JSON，网络请求和快照读取在执行诊断时进行。

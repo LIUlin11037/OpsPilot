@@ -240,6 +240,7 @@ class NextCheck(TypedDict):
 
 
 DiagnosisWorkflow = Literal["http_health", "queue", "target_trace"]
+RequestedCheck = Literal["check_consumer_health", "check_dependencies", "check_service_log"]
 
 
 class DiagnosisRouteFields(TypedDict):
@@ -248,7 +249,7 @@ class DiagnosisRouteFields(TypedDict):
 
 
 class DiagnosisRoute(DiagnosisRouteFields, total=False):
-    selected_by: Literal["message_id", "delivery_id", "voter_id", "workflow"]
+    selected_by: Literal["message_id", "delivery_id", "voter_id", "workflow"] | RequestedCheck
 
 
 class DiagnosisReport(DiagnosisReportFields, total=False):

@@ -21,6 +21,9 @@ _ROUTE_BASES = {
     "delivery_id": "Requested delivery ID",
     "voter_id": "Requested voter ID",
     "workflow": "Explicit workflow",
+    "check_consumer_health": "--check-consumer-health",
+    "check_dependencies": "--check-dependencies",
+    "check_service_log": "--check-service-log",
 }
 _SCOPE_LABELS = {
     "service_url": "Service URL",

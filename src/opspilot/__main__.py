@@ -28,6 +28,7 @@ from opspilot.core.diagnosis import (
     DiagnosisRoute,
     HealthTool,
     PlannedCheck,
+    RequestedCheck,
     TargetProcessingTool,
     run_diagnosis,
     run_queue_diagnosis,
@@ -312,11 +313,16 @@ def _prepare_auto_diagnosis(
     if args.management_url is None and (args.vhost is not None or args.timeout is not None):
         raise ValueError("--vhost and --timeout require --management-url")
 
-    health_option = None
+    requested_check: RequestedCheck | None = None
     if args.check_service_log:
-        health_option = "--check-service-log"
+        requested_check = "check_service_log"
     elif args.check_dependencies:
-        health_option = "--check-dependencies"
+        requested_check = "check_dependencies"
+    health_option = f"--{requested_check.replace('_', '-')}" if requested_check is not None else None
+    if args.check_consumer_health:
+        if health_option is not None:
+            raise ValueError(f"--check-consumer-health cannot be combined with {health_option}")
+        requested_check = "check_consumer_health"
 
     if args.delivery_id is not None or voter_id is not None:
         if health_option is not None:
@@ -351,6 +357,7 @@ def _prepare_auto_diagnosis(
 
     routing = select_diagnosis_route(
         question, message_lookup=args.message_id is not None, workflow=args.workflow,
+        requested_check=requested_check,
     )
     if health_option is not None and routing["workflow"] != "http_health":
         raise ValueError(f"{health_option} requires the HTTP health workflow")
@@ -363,7 +370,7 @@ def _prepare_auto_diagnosis(
             config = load_health_config(args.health_config)
         if config is None:
             raise ValueError(
-                "HTTP health symptoms matched. Supply --health-config or a health section in --config."
+                "Supply --health-config or a health section in --config for the HTTP health workflow."
             )
         if args.check_service_log and config.service_log_path is None:
             raise ValueError(_LOG_CONFIG_REQUIRED)
@@ -408,7 +415,7 @@ def _prepare_auto_diagnosis(
         rabbitmq = _rabbitmq_config(args, parser)
     if rabbitmq is None:
         raise ValueError(
-            "Queue symptoms matched. Supply --management-url and --queue or a rabbitmq section in --config."
+            "Supply --management-url and --queue or a rabbitmq section in --config for the queue workflow."
         )
     if args.check_consumer_health and rabbitmq.consumer_health_url is None:
         raise ValueError("--check-consumer-health requires rabbitmq.consumer_health_url in --config")
