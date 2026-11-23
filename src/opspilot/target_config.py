@@ -75,8 +75,10 @@ def _parse_snapshot(data: object, config_dir: Path, label: str) -> Path:
 
 def load_target_config(path: Path) -> TargetConfig:
     data = read_config_object(path, "Target")
-    if data.keys() - {"health", "rabbitmq", "hirehub", "voting"}:
-        raise ValueError("Target configuration contains unsupported fields.")
+    unsupported = data.keys() - {"health", "rabbitmq", "hirehub", "voting"}
+    if unsupported:
+        names = ", ".join(repr(name) for name in sorted(unsupported))
+        raise ValueError(f"Target configuration contains unsupported fields: {names}.")
     if not data:
         raise ValueError("Target configuration requires a health, rabbitmq, hirehub, or voting section.")
     health = data.get("health")

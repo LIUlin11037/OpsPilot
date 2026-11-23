@@ -34,8 +34,10 @@ def load_health_config(path: Path) -> HealthConfig:
 
 
 def parse_health_config(data: dict[str, object], *, config_dir: Path = Path(".")) -> HealthConfig:
-    if data.keys() - _FIELDS:
-        raise ValueError("Health configuration contains unsupported fields.")
+    unsupported = data.keys() - _FIELDS
+    if unsupported:
+        names = ", ".join(repr(name) for name in sorted(unsupported))
+        raise ValueError(f"Health configuration contains unsupported fields: {names}.")
     service_url = data.get("service_url")
     if not isinstance(service_url, str) or not service_url.strip():
         raise ValueError("service_url must be a nonempty URL string.")

@@ -25,6 +25,7 @@ def _cli(directory: str, *args: str) -> subprocess.CompletedProcess[str]:
     ("service_status", "dependency_status", "service_health", "dependency_health"),
     [
         (204, 503, "healthy", None),
+        (424, 204, "unhealthy", "healthy"),
         (503, 204, "unhealthy", "healthy"),
         (503, 500, "unhealthy", "unhealthy"),
         (403, 204, "unknown", "healthy"),

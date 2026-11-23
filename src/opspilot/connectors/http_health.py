@@ -54,7 +54,7 @@ class HttpHealthConnector:
 
         if 200 <= status < 300:
             return self._observed(status, "healthy")
-        if 500 <= status < 600:
+        if status == 424 or 500 <= status < 600:
             return self._observed(status, "unhealthy")
         evidence = self._unavailable(_STATUS_REASONS.get(status, "unexpected_health_status"))
         evidence["http_status"] = status

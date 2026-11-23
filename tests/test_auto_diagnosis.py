@@ -82,6 +82,26 @@ def test_auto_diagnosis_runs_and_saves_the_selected_workflow(
         assert f"**Matched terms** {', '.join(terms)}" in markdown.stdout
 
 
+@pytest.mark.parametrize(
+    ("config_data", "error"),
+    [
+        ({"helth": {}}, "Target configuration contains unsupported fields: 'helth'"),
+        ({"health": {"servce_url": "http://localhost/health"}},
+         "Health configuration contains unsupported fields: 'servce_url'"),
+        ({"health": {"service_url": "http://localhost/health", "dependency_urls": ["http://localhost", "bad-url"]}},
+         "dependency_urls[1]: Use an HTTP(S) health URL"),
+    ],
+)
+def test_auto_health_plan_identifies_the_invalid_config_field(config_data, error) -> None:
+    with TemporaryDirectory(prefix="opspilot-target-config-") as directory:
+        config = Path(directory) / "target.json"
+        config.write_text(json.dumps(config_data), encoding="utf-8")
+        result = _cli(directory, "diagnose-auto", "--config", str(config), "--plan", "HTTP health")
+        assert result.returncode == 2
+        assert error in result.stderr
+        assert not (Path(directory) / ".opspilot").exists()
+
+
 @pytest.mark.parametrize("force_dependencies", [False, True])
 def test_auto_diagnosis_tracks_each_dependency_of_a_healthy_service(processing_service, force_dependencies) -> None:
     with TemporaryDirectory(prefix="opspilot-auto-recheck-") as directory:

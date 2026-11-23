@@ -255,6 +255,13 @@ def _validate_health_rechecks(
         raise ValueError("--check-dependencies requires at least one configured HTTP, Redis, or MySQL dependency")
 
 
+def _http_health_tool(url: str, timeout_seconds: float, field: str) -> HttpHealthConnector:
+    try:
+        return HttpHealthConnector(url, timeout_seconds)
+    except ValueError as error:
+        raise ValueError(f"{field}: {error}") from error
+
+
 def _run_configured_health(
     question: str, config: HealthConfig, *, check_dependencies: bool = False,
     check_service_log: bool = False,
@@ -262,9 +269,10 @@ def _run_configured_health(
     _validate_health_rechecks(
         config, check_dependencies=check_dependencies, check_service_log=check_service_log,
     )
-    service = HttpHealthConnector(config.service_url, config.timeout_seconds)
+    service = _http_health_tool(config.service_url, config.timeout_seconds, "service_url")
     dependencies: list[HealthTool] = [
-        HttpHealthConnector(url, config.timeout_seconds) for url in config.dependency_urls
+        _http_health_tool(url, config.timeout_seconds, f"dependency_urls[{index}]")
+        for index, url in enumerate(config.dependency_urls)
     ]
     dependencies.extend(
         RedisHealthConnector(url, config.timeout_seconds) for url in config.redis_dependency_urls
@@ -386,7 +394,7 @@ def _prepare_auto_diagnosis(
         _validate_health_rechecks(
             config, check_dependencies=args.check_dependencies, check_service_log=args.check_service_log,
         )
-        service = HttpHealthConnector(config.service_url, config.timeout_seconds)
+        service = _http_health_tool(config.service_url, config.timeout_seconds, "service_url")
         checks: list[PlannedCheck] = [{
             "tool": "inspect_service_health", "when": "always", "count": 1, "sources": [service.endpoint],
         }]
@@ -398,7 +406,8 @@ def _prepare_auto_diagnosis(
                 "sources": [config.service_log_path.absolute().as_uri()],
             })
         dependency_sources = [
-            HttpHealthConnector(url, config.timeout_seconds).endpoint for url in config.dependency_urls
+            _http_health_tool(url, config.timeout_seconds, f"dependency_urls[{index}]").endpoint
+            for index, url in enumerate(config.dependency_urls)
         ]
         dependency_sources.extend(
             RedisHealthConnector(url, config.timeout_seconds).endpoint for url in config.redis_dependency_urls

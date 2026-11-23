@@ -2,6 +2,8 @@
 
 OpsPilot 面向异构微服务的只读故障诊断。CLI 支持消息积压、HireHub 投递通知追踪和 HTTP 健康端点诊断。
 
+[首次接入 HTTP 目标](docs/first-http-target.md) · [实施路线图与 v1.0 验收目标](docs/implementation-roadmap.md) · [v0.1 发布前验收记录](docs/v0.1-release-acceptance.md)
+
 在仓库根目录使用 Python 3.10 或更高版本运行以下命令（Windows PowerShell）。
 
 ```powershell
