@@ -11,7 +11,7 @@ from dataclasses import replace
 from functools import partial
 from math import isfinite
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Literal
 
 from opspilot.adapters.hirehub_capture import HireHubLiveAdapter
 from opspilot.adapters.hirehub_snapshot import NOTIFICATION_QUEUE, HireHubSnapshotAdapter
@@ -27,6 +27,7 @@ from opspilot.connectors.rabbitmq import RabbitMQQueueConnector, queue_endpoint
 from opspilot.connectors.redis_health import RedisHealthConnector
 from opspilot.connectors.simulated import SimulatedQueueConnector
 from opspilot.core.diagnosis import (
+    DiagnosisPlan,
     DiagnosisReport,
     DiagnosisRoute,
     Evidence,
@@ -47,6 +48,9 @@ from opspilot.core.startup import run_startup
 from opspilot.core.target_trace import run_target_trace
 from opspilot.core.triage import select_diagnosis_route
 from opspilot.health_config import DEFAULT_HEALTH_TIMEOUT_SECONDS, HealthConfig, load_health_config
+from opspilot.investigation_store import (
+    InvestigationBusyError, InvestigationRequest, TaskJournal, create_task, load_task, lock_task,
+)
 from opspilot.report_comparison import (
     compare_health_reports, compare_queue_reports, compare_trace_reports, compare_voting_reports,
 )
@@ -299,24 +303,31 @@ def _run_configured_health(
     )
 
 
-class _AutoDiagnosisPlanFields(TypedDict):
-    question: str
-    routing: DiagnosisRoute
-    scope: dict[str, str | int]
-    checks: list[PlannedCheck]
-
-
-class _AutoDiagnosisPlan(_AutoDiagnosisPlanFields, total=False):
-    budget: InvestigationBudget
-
-
-def _prepare_investigation(
-    question: str, target: TargetConfig, budget: InvestigationBudget, message_id: str | None,
-) -> tuple[_AutoDiagnosisPlan, Callable[[], DiagnosisReport]]:
+def _investigation_request(target: TargetConfig, message_id: str | None) -> InvestigationRequest:
     health, rabbitmq = target.health, target.rabbitmq
     if health is None or rabbitmq is None:
         raise ValueError("The investigation requires health and rabbitmq sections in --config.")
-    service = _http_health_tool(health.service_url, health.timeout_seconds, "health.service_url")
+    return {
+        "service_url": health.service_url, "health_timeout_seconds": health.timeout_seconds,
+        "management_url": rabbitmq.management_url, "queue": rabbitmq.queue, "vhost": rabbitmq.vhost,
+        "queue_timeout_seconds": rabbitmq.timeout_seconds, "consumer_health_url": rabbitmq.consumer_health_url,
+        "processing_url": rabbitmq.processing_url, "message_id": message_id,
+        "processing_record": str(rabbitmq.processing_record) if rabbitmq.processing_record is not None else None,
+    }
+
+
+def _prepare_investigation(
+    question: str, request: InvestigationRequest, budget: InvestigationBudget,
+) -> tuple[DiagnosisPlan, Callable[..., DiagnosisReport]]:
+    record_path = request["processing_record"]
+    message_id = request["message_id"]
+    rabbitmq = RabbitMQTargetConfig(
+        request["management_url"], request["queue"], request["vhost"],
+        timeout_seconds=request["queue_timeout_seconds"],
+        consumer_health_url=request["consumer_health_url"], processing_url=request["processing_url"],
+        processing_record=Path(record_path) if record_path is not None else None,
+    )
+    service = _http_health_tool(request["service_url"], request["health_timeout_seconds"], "health.service_url")
     endpoint = queue_endpoint(rabbitmq.management_url, rabbitmq.queue, rabbitmq.vhost)
     if endpoint.port == 0:
         raise ValueError("RabbitMQ management URL port must be positive.")
@@ -385,7 +396,7 @@ def _prepare_investigation(
             "count": 1, "sources": [processing_tool.source],
         })
 
-    plan: _AutoDiagnosisPlan = {
+    plan: DiagnosisPlan = {
         "question": question, "routing": {"workflow": "investigation", "matched_terms": [], "selected_by": "workflow"},
         "scope": scope, "checks": checks, "budget": budget,
     }
@@ -396,9 +407,44 @@ def _prepare_investigation(
     )
 
 
+def _run_saved_investigation(database: Path, task_id: str, *, announce: bool = False) -> StoredReport:
+    if load_task(database, task_id) is None:
+        raise ValueError(f"No investigation task found for {task_id}.")
+    with lock_task(database, task_id):
+        task = load_task(database, task_id)
+        if task is None:
+            raise ValueError(f"No investigation task found for {task_id}.")
+        if task["status"] == "completed":
+            stored = load_report(database, task_id)
+            if stored is None:
+                raise ValueError(f"Completed investigation {task_id} is missing its report.")
+            return stored
+        if announce:
+            print(f"OpsPilot investigation task: {task_id}", file=sys.stderr, flush=True)
+        plan = task["plan"]
+        current, run = _prepare_investigation(plan["question"], task["request"], plan["budget"])
+        if current != plan:
+            raise ValueError("The current investigation workflow differs from the saved plan.")
+        journal = TaskJournal(database, task)
+        report = run(journal=journal)
+        report["routing"] = plan["routing"]
+        report["planned_scope"] = plan["scope"]
+        report["planned_checks"] = plan["checks"]
+        if task["previous_task_id"] is not None:
+            report["previous_task_id"] = task["previous_task_id"]
+        return journal.complete(report)
+
+
+def _start_investigation(
+    database: Path, request: InvestigationRequest, plan: DiagnosisPlan, *, previous_task_id: str | None = None,
+) -> StoredReport:
+    task = create_task(database, request, plan, previous_task_id=previous_task_id)
+    return _run_saved_investigation(database, task["task_id"], announce=True)
+
+
 def _prepare_auto_diagnosis(
     args: argparse.Namespace, parser: argparse.ArgumentParser,
-) -> tuple[_AutoDiagnosisPlan, Callable[[], DiagnosisReport]]:
+) -> tuple[DiagnosisPlan, Callable[[], DiagnosisReport]]:
     question = args.question.strip()
     if not question:
         raise ValueError("question must not be empty")
@@ -460,10 +506,9 @@ def _prepare_auto_diagnosis(
             raise ValueError("--max-steps must be a positive integer.")
         if not isfinite(max_seconds) or max_seconds <= 0:
             raise ValueError("--max-seconds must be a finite positive number.")
-        return _prepare_investigation(
-            question, load_target_config(args.config),
-            {"max_steps": max_steps, "max_seconds": max_seconds}, args.message_id,
-        )
+        request = _investigation_request(load_target_config(args.config), args.message_id)
+        plan, _ = _prepare_investigation(question, request, {"max_steps": max_steps, "max_seconds": max_seconds})
+        return plan, partial(_start_investigation, args.db, request, plan)
     if args.max_steps is not None or args.max_seconds is not None:
         raise ValueError("--max-steps and --max-seconds require --workflow investigation.")
 
@@ -478,7 +523,7 @@ def _prepare_auto_diagnosis(
             if order is None:
                 raise ValueError("--order-id requires an order section in --config")
             adapter = OrderTraceAdapter(order.environment, order.orders_db, order.inventory_db, order.shipping_db)
-            order_plan: _AutoDiagnosisPlan = {
+            order_plan: DiagnosisPlan = {
                 "question": question,
                 "routing": {"workflow": "target_trace", "matched_terms": [], "selected_by": "entity_id"},
                 "scope": {"entity_id": args.order_id, "environment": order.environment, **adapter.sources()},
@@ -504,7 +549,7 @@ def _prepare_auto_diagnosis(
         routing: DiagnosisRoute = {
             "workflow": "target_trace", "matched_terms": [], "selected_by": selected_by,
         }
-        plan: _AutoDiagnosisPlan = {
+        plan: DiagnosisPlan = {
             "question": question, "routing": routing,
             "scope": {selected_by: entity_id, "snapshot_source": snapshot.absolute().as_uri()},
             "checks": [{"tool": "inspect_target_trace", "when": "always", "count": 1}],
@@ -751,6 +796,12 @@ def main() -> None:
     report_command = commands.add_parser("report", help="Show a saved report.")
     report_command.add_argument("task_id", help="Task ID returned by diagnose.")
     report_command.add_argument("--format", choices=("json", "markdown"), default="json")
+    for name, help_text in (
+        ("task", "Show a saved investigation and its attempts."),
+        ("resume", "Continue an unfinished investigation."),
+        ("recheck", "Start a fresh investigation using a completed task's plan."),
+    ):
+        commands.add_parser(name, help=help_text).add_argument("task_id")
     reports_command = commands.add_parser("reports", help="List recently saved reports.")
     reports_command.add_argument("--limit", type=int, default=20, help="Maximum reports (default: 20).")
     report_ids = reports_command.add_mutually_exclusive_group()
@@ -855,6 +906,28 @@ def main() -> None:
             parser.exit(1)
         return
 
+    if args.command in ("task", "resume", "recheck"):
+        try:
+            with _report_storage_errors(parser):
+                if args.command == "resume":
+                    output = _run_saved_investigation(args.db, args.task_id)
+                else:
+                    task = load_task(args.db, args.task_id)
+                    if task is None:
+                        raise ValueError(f"No investigation task found for {args.task_id}.")
+                    if args.command == "task":
+                        output = task
+                    else:
+                        if task["status"] != "completed":
+                            raise ValueError("An investigation must be completed before rechecking.")
+                        output = _start_investigation(
+                            args.db, task["request"], task["plan"], previous_task_id=task["task_id"],
+                        )
+        except (ValueError, InvestigationBusyError) as error:
+            parser.exit(1, f"opspilot: {error}\n")
+        print(json.dumps(output, indent=2))
+        return
+
     try:
         if args.command == "reports":
             if not 0 < args.limit < 2**63:
@@ -937,12 +1010,19 @@ def main() -> None:
                 if args.plan:
                     print(json.dumps(plan, indent=2))
                     return
+                if "budget" in plan:
+                    with _report_storage_errors(parser):
+                        stored = run_diagnostic()
+                    print(json.dumps(stored, indent=2))
+                    return
                 report = run_diagnostic()
                 report["routing"] = plan["routing"]
                 report["planned_scope"] = plan["scope"]
                 report["planned_checks"] = plan["checks"]
             except ValueError as error:
                 auto_diagnose.error(str(error))
+            except InvestigationBusyError as error:
+                auto_diagnose.exit(1, f"opspilot: {error}\n")
         elif args.command == "diagnose-voting":
             question = args.question.strip()
             if not question:

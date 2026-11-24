@@ -284,6 +284,8 @@ def render_markdown(report: StoredReport) -> str:
         f"- **Status** {_value(report['status'])}",
         f"- **Conclusion** {_value(report['conclusion'])}",
     ]
+    if "previous_task_id" in report:
+        lines.append(f"- **Previous task ID** {_value(report['previous_task_id'])}")
     correlation = report.get("processing_correlation")
     routing = report.get("routing")
     if routing is not None:

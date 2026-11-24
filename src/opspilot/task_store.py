@@ -28,33 +28,38 @@ class ReportSummary(ReportSummaryFields, total=False):
     requested_message_id: str
 
 
-def _open_read_only(database: Path) -> sqlite3.Connection:
+def open_read_only(database: Path) -> sqlite3.Connection:
     database_uri = f"{database.resolve().as_uri()}?mode=ro"
     return sqlite3.connect(database_uri, uri=True)
 
 
+def initialize_reports(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS reports ("
+        "task_id TEXT PRIMARY KEY NOT NULL, payload TEXT NOT NULL)"
+    )
+
+
+def insert_report(connection: sqlite3.Connection, task_id: str, report: DiagnosisReport) -> StoredReport:
+    initialize_reports(connection)
+    connection.execute(
+        "INSERT INTO reports (task_id, payload) VALUES (?, ?)", (task_id, json.dumps(report)),
+    )
+    return {**report, "task_id": task_id}
+
+
 def save_report(database: Path, report: DiagnosisReport) -> StoredReport:
     task_id = str(uuid4())
-    payload = json.dumps(report)
     database.parent.mkdir(parents=True, exist_ok=True)
-
     with closing(sqlite3.connect(database)) as connection, connection:
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS reports ("
-            "task_id TEXT PRIMARY KEY NOT NULL, payload TEXT NOT NULL)"
-        )
-        connection.execute(
-            "INSERT INTO reports (task_id, payload) VALUES (?, ?)", (task_id, payload)
-        )
-
-    return {**report, "task_id": task_id}
+        return insert_report(connection, task_id, report)
 
 
 def load_report(database: Path, task_id: str) -> StoredReport | None:
     if not database.exists():
         return None
 
-    with closing(_open_read_only(database)) as connection:
+    with closing(open_read_only(database)) as connection:
         row = connection.execute(
             "SELECT payload FROM reports WHERE task_id = ?", (task_id,)
         ).fetchone()
@@ -76,7 +81,7 @@ def list_reports(
     filter_trace = delivery_id is not None or voter_id is not None or environment is not None
     has_filters = filter_trace or service_url is not None or queue_source is not None or message_id is not None
     summaries: list[ReportSummary] = []
-    with closing(_open_read_only(database)) as connection:
+    with closing(open_read_only(database)) as connection:
         # The original report table has a rowid and no save timestamp.
         # Filters apply to stored payloads, so the limit counts matching reports.
         rows = connection.execute(

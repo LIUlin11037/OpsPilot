@@ -21,6 +21,8 @@ python -m venv .venv
 
 同一目标的 HTTP 端点和 RabbitMQ 队列存在已知关联时，可显式选择 `--workflow investigation`。它从 HTTP 开始，按观测和预算读取后续来源，并在报告中记录每步依据。[多步调查用法与隔离演示](docs/v0.4-investigation.md)
 
+多步调查在第一次读取前就会分配任务 ID。用 `task` 查看进度，`resume` 续跑原任务，`recheck` 按原计划重新采集并保存新报告。[任务恢复与复查](docs/v0.5-investigation-recovery.md)
+
 把常用目标保存为 UTF-8 的 `target.json`。可以按需配置 `health`、`rabbitmq`、`hirehub`、`voting` 和 `order`。`health` 使用 HTTP 健康配置字段，`rabbitmq` 需要管理地址与队列名，虚拟主机默认为 `/`，超时默认为 5 秒。RabbitMQ 和 MySQL 凭据通过环境变量提供。
 
 ```json

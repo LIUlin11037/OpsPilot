@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from time import perf_counter
-from typing import Literal, TypedDict
+from typing import Literal, Protocol, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
@@ -33,12 +33,25 @@ class _FailedRead(UnavailableEvidence):
     reason: str
 
 
-class _State(TypedDict, total=False):
-    started_at: float
-    decision: InvestigationDecision
+class InvestigationCheckpoint(TypedDict):
     decisions: list[InvestigationDecision]
     evidence: list[Evidence]
     tool_calls: list[ToolCall]
+    elapsed_ms: float
+
+
+class InvestigationJournal(Protocol):
+    @property
+    def checkpoint(self) -> InvestigationCheckpoint: ...
+
+    def begin_read(self, decision: InvestigationDecision, source: str, elapsed_ms: float) -> bool: ...
+
+    def finish_read(self, checkpoint: InvestigationCheckpoint) -> None: ...
+
+
+class _State(InvestigationCheckpoint, total=False):
+    started_at: float
+    decision: InvestigationDecision
     report: DiagnosisReport
 
 
@@ -92,6 +105,7 @@ def run_investigation(
     consumer: InvestigationTool | None = None,
     processing: InvestigationTool | None = None,
     message_id: str | None = None,
+    journal: InvestigationJournal | None = None,
 ) -> DiagnosisReport:
     tools: dict[ToolName, InvestigationTool] = {"inspect_service_health": service, "inspect_queue": queue}
     if consumer is not None:
@@ -145,8 +159,11 @@ def run_investigation(
         tool = tools[name]
 
         def observe() -> Evidence:
+            available = budget["max_seconds"] - (perf_counter() - state["started_at"])
+            if available <= 0:
+                return unavailable_read(name, tool.source, "time_budget_exhausted", timed_out=True)
             try:
-                result = tool.read(remaining)
+                result = tool.read(available)
             except TimeoutError:
                 return unavailable_read(name, tool.source, "request_timeout", timed_out=True)
             except OSError:
@@ -157,12 +174,20 @@ def run_investigation(
                 return unavailable_read(name, tool.source, "message_id_mismatch")
             return result
 
-        evidence, duration = measure_tool_call(observe)
-        return {
+        if journal is not None and not journal.begin_read(decision, tool.source, elapsed * 1000):
+            evidence = unavailable_read(name, tool.source, "interruption_retry_exhausted")
+            duration = 0.0
+        else:
+            evidence, duration = measure_tool_call(observe)
+        checkpoint: InvestigationCheckpoint = {
             "evidence": [*state["evidence"], evidence],
             "decisions": [*state["decisions"], decision],
             "tool_calls": [*state["tool_calls"], tool_call_from_evidence(evidence, duration)],
+            "elapsed_ms": (perf_counter() - state["started_at"]) * 1000,
         }
+        if journal is not None:
+            journal.finish_read(checkpoint)
+        return {**checkpoint}
 
     def after_select(state: _State) -> Literal["read", "__end__"]:
         return END if "report" in state else "read"
@@ -177,4 +202,10 @@ def run_investigation(
     graph.add_conditional_edges("select", after_select)
     graph.add_conditional_edges("read", after_read)
     compiled = graph.compile()
-    return compiled.invoke({"started_at": perf_counter(), "decisions": [], "evidence": [], "tool_calls": []})["report"]
+    initial: InvestigationCheckpoint = (
+        journal.checkpoint if journal is not None
+        else {"decisions": [], "evidence": [], "tool_calls": [], "elapsed_ms": 0.0}
+    )
+    return compiled.invoke({
+        **initial, "started_at": perf_counter() - initial["elapsed_ms"] / 1000,
+    })["report"]

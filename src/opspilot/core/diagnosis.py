@@ -270,6 +270,17 @@ class InvestigationBudget(TypedDict):
     max_seconds: float
 
 
+class DiagnosisPlanFields(TypedDict):
+    question: str
+    routing: DiagnosisRoute
+    scope: dict[str, str | int]
+    checks: list[PlannedCheck]
+
+
+class DiagnosisPlan(DiagnosisPlanFields, total=False):
+    budget: InvestigationBudget
+
+
 class InvestigationDecision(TypedDict):
     tool: ToolName
     reason: str
@@ -297,6 +308,7 @@ class DiagnosisReport(DiagnosisReportFields, total=False):
     planned_scope: dict[str, str | int]
     planned_checks: list[PlannedCheck]
     investigation: InvestigationDetails
+    previous_task_id: str
 
 
 _NEXT_CHECK_DESCRIPTIONS: dict[NextCheckAction, str] = {
