@@ -7,7 +7,9 @@ import sqlite3
 import sys
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from functools import partial
+from math import isfinite
 from pathlib import Path
 from typing import Literal, TypedDict
 
@@ -27,14 +29,20 @@ from opspilot.connectors.simulated import SimulatedQueueConnector
 from opspilot.core.diagnosis import (
     DiagnosisReport,
     DiagnosisRoute,
+    Evidence,
+    HealthEvidence,
     HealthTool,
+    InvestigationBudget,
     PlannedCheck,
+    ProcessingRead,
     RequestedCheck,
     TargetProcessingTool,
+    read_health,
     run_diagnosis,
     run_queue_diagnosis,
 )
 from opspilot.core.health_diagnosis import run_health_diagnosis
+from opspilot.core.investigation import InvestigationTool, run_investigation, unavailable_read
 from opspilot.core.startup import run_startup
 from opspilot.core.target_trace import run_target_trace
 from opspilot.core.triage import select_diagnosis_route
@@ -48,7 +56,7 @@ from opspilot.report_markdown import (
     render_queue_comparison_markdown,
     render_voting_comparison_markdown,
 )
-from opspilot.target_config import RabbitMQTargetConfig, load_target_config
+from opspilot.target_config import RabbitMQTargetConfig, TargetConfig, load_target_config
 from opspilot.task_store import StoredReport, list_reports, load_report, save_report
 
 
@@ -291,11 +299,101 @@ def _run_configured_health(
     )
 
 
-class _AutoDiagnosisPlan(TypedDict):
+class _AutoDiagnosisPlanFields(TypedDict):
     question: str
     routing: DiagnosisRoute
     scope: dict[str, str | int]
     checks: list[PlannedCheck]
+
+
+class _AutoDiagnosisPlan(_AutoDiagnosisPlanFields, total=False):
+    budget: InvestigationBudget
+
+
+def _prepare_investigation(
+    question: str, target: TargetConfig, budget: InvestigationBudget, message_id: str | None,
+) -> tuple[_AutoDiagnosisPlan, Callable[[], DiagnosisReport]]:
+    health, rabbitmq = target.health, target.rabbitmq
+    if health is None or rabbitmq is None:
+        raise ValueError("The investigation requires health and rabbitmq sections in --config.")
+    service = _http_health_tool(health.service_url, health.timeout_seconds, "health.service_url")
+    endpoint = queue_endpoint(rabbitmq.management_url, rabbitmq.queue, rabbitmq.vhost)
+    if endpoint.port == 0:
+        raise ValueError("RabbitMQ management URL port must be positive.")
+    queue_source = endpoint.geturl()
+    checks: list[PlannedCheck] = [
+        {"tool": "inspect_service_health", "when": "always", "count": 1, "sources": [service.endpoint]},
+        {"tool": "inspect_queue", "when": "service_unhealthy_or_unknown", "count": 1, "sources": [queue_source]},
+    ]
+    scope: dict[str, str | int] = {
+        "service_url": service.endpoint, "queue": rabbitmq.queue, "vhost": rabbitmq.vhost, "queue_source": queue_source,
+    }
+
+    def read_queue(remaining: float) -> Evidence:
+        username = os.getenv("OPSPILOT_RABBITMQ_USER")
+        password = os.getenv("OPSPILOT_RABBITMQ_PASSWORD")
+        if not username or ":" in username or password is None:
+            return unavailable_read("inspect_queue", queue_source, "credentials_unconfigured")
+        return RabbitMQQueueConnector(
+            rabbitmq.management_url, rabbitmq.queue, username, password, vhost=rabbitmq.vhost,
+            timeout_seconds=min(rabbitmq.timeout_seconds, remaining),
+        ).inspect_queue()
+
+    def read_service(remaining: float) -> HealthEvidence:
+        return {**read_health(replace(service, timeout_seconds=min(service.timeout_seconds, remaining))),
+                "tool": "inspect_service_health"}
+
+    consumer_tool = None
+    if rabbitmq.consumer_health_url is not None:
+        consumer = _http_health_tool(
+            rabbitmq.consumer_health_url, rabbitmq.timeout_seconds, "rabbitmq.consumer_health_url",
+        )
+
+        def read_consumer(remaining: float) -> HealthEvidence:
+            return {**read_health(replace(consumer, timeout_seconds=min(consumer.timeout_seconds, remaining))),
+                    "tool": "inspect_consumer_endpoint"}
+
+        consumer_tool = InvestigationTool(consumer.endpoint, read_consumer)
+        checks.append({
+            "tool": "inspect_consumer_endpoint", "when": "queue_activity_or_unavailable",
+            "count": 1, "sources": [consumer.endpoint],
+        })
+
+    processing_tool = None
+    if message_id is not None:
+        scope["message_id"] = message_id
+        if rabbitmq.processing_url is not None:
+            adapter = HttpProcessingAdapter(
+                rabbitmq.processing_url, rabbitmq.queue, rabbitmq.vhost, rabbitmq.timeout_seconds,
+            )
+            source = adapter.request_url(message_id=message_id).geturl()
+
+            def read_processing(remaining: float) -> ProcessingRead:
+                bounded = replace(adapter, timeout_seconds=min(adapter.timeout_seconds, remaining))
+                return bounded.inspect_processing(message_id=message_id)
+
+            processing_tool = InvestigationTool(source, read_processing)
+        elif rabbitmq.processing_record is not None:
+            record = JsonProcessingAdapter(rabbitmq.processing_record, queue=rabbitmq.queue, vhost=rabbitmq.vhost)
+            processing_tool = InvestigationTool(
+                record.path.absolute().as_uri(), lambda _: record.inspect_processing(message_id=message_id),
+            )
+        else:
+            raise ValueError("--message-id requires rabbitmq.processing_url or rabbitmq.processing_record.")
+        checks.append({
+            "tool": "inspect_processing", "when": "exact_message_after_service_issue",
+            "count": 1, "sources": [processing_tool.source],
+        })
+
+    plan: _AutoDiagnosisPlan = {
+        "question": question, "routing": {"workflow": "investigation", "matched_terms": [], "selected_by": "workflow"},
+        "scope": scope, "checks": checks, "budget": budget,
+    }
+    return plan, partial(
+        run_investigation, question, InvestigationTool(service.endpoint, read_service),
+        InvestigationTool(queue_source, read_queue), budget,
+        consumer=consumer_tool, processing=processing_tool, message_id=message_id,
+    )
 
 
 def _prepare_auto_diagnosis(
@@ -350,6 +448,24 @@ def _prepare_auto_diagnosis(
         if health_option is not None:
             raise ValueError(f"--check-consumer-health cannot be combined with {health_option}")
         requested_check = "check_consumer_health"
+
+    if args.workflow == "investigation":
+        if args.config is None:
+            raise ValueError("--workflow investigation requires --config.")
+        if requested_check is not None:
+            raise ValueError("Investigation uses its own check conditions, without forced check options.")
+        max_steps = 4 if args.max_steps is None else args.max_steps
+        max_seconds = 15.0 if args.max_seconds is None else args.max_seconds
+        if max_steps < 1:
+            raise ValueError("--max-steps must be a positive integer.")
+        if not isfinite(max_seconds) or max_seconds <= 0:
+            raise ValueError("--max-seconds must be a finite positive number.")
+        return _prepare_investigation(
+            question, load_target_config(args.config),
+            {"max_steps": max_steps, "max_seconds": max_seconds}, args.message_id,
+        )
+    if args.max_steps is not None or args.max_seconds is not None:
+        raise ValueError("--max-steps and --max-seconds require --workflow investigation.")
 
     if args.delivery_id is not None or voter_id is not None or args.order_id is not None:
         if health_option is not None:
@@ -588,8 +704,10 @@ def main() -> None:
     auto_diagnose.add_argument("--management-url", help="RabbitMQ Management API base URL.")
     auto_diagnose.add_argument("--plan", action="store_true", help="Show the selected workflow and its configured checks.")
     auto_diagnose.add_argument(
-        "--workflow", choices=("http_health", "queue"), help="Select a workflow explicitly.",
+        "--workflow", choices=("http_health", "queue", "investigation"), help="Select a workflow explicitly.",
     )
+    auto_diagnose.add_argument("--max-steps", type=int, help="Maximum investigation reads (default: 4).")
+    auto_diagnose.add_argument("--max-seconds", type=float, help="Investigation time budget in seconds (default: 15).")
     _add_queue_options(auto_diagnose)
     auto_scope = auto_diagnose.add_mutually_exclusive_group()
     auto_scope.add_argument("--message-id", help="Look up an exact message in the configured processing source.")

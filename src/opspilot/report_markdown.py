@@ -44,6 +44,16 @@ _PLAN_CONDITIONS = {
     "service_unhealthy_or_unknown": "Service unhealthy or unknown",
     "service_unhealthy_or_unknown_or_log_errors": "Service unhealthy or unknown, or service log errors observed",
     "queue_activity": "Pending or unacknowledged messages observed",
+    "queue_activity_or_unavailable": "Queue activity observed or queue read unavailable",
+    "exact_message_after_service_issue": "Exact message ID supplied and service unhealthy or unknown",
+}
+_INVESTIGATION_REASONS = {
+    "configured_service": "Configured starting endpoint",
+    "service_unhealthy": "Service health check reported an issue",
+    "service_health_unknown": "Service health could not be established",
+    "queue_activity": "Queue activity was observed",
+    "queue_read_unavailable": "Queue read was unavailable",
+    "exact_message_after_service_issue": "Exact message ID supplied and service unhealthy or unknown",
 }
 _VOTING_FIELDS = {
     "branches.queued_vote": "Redis queue status",
@@ -309,6 +319,28 @@ def render_markdown(report: StoredReport) -> str:
             f"- **{_value(branch)} branch** {_value(status)}"
             for branch, status in trace["branches"].items()
         )
+
+    investigation = report.get("investigation")
+    if investigation is not None:
+        budget = investigation["budget"]
+        lines.extend([
+            "", "## Investigation", "",
+            f"- **Stop reason** {_value(investigation['stop_reason'])}",
+            f"- **Budget** {budget['max_steps']} reads, {budget['max_seconds']:g} seconds",
+            f"- **Elapsed** {investigation['elapsed_ms']:.3f} ms",
+        ])
+        if investigation["conflicting_evidence_indexes"]:
+            indexes = _value(investigation["conflicting_evidence_indexes"])
+            lines.append(f"- **Different signals (evidence indexes)** {indexes}")
+        if investigation["decisions"]:
+            lines.extend([
+                "", "| Read | Decision | Basis (zero-based evidence indexes) |",
+                "| --- | --- | --- |",
+            ])
+            for decision in investigation["decisions"]:
+                reason = _INVESTIGATION_REASONS.get(decision["reason"], decision["reason"])
+                indexes = ", ".join(str(index) for index in decision["evidence_indexes"])
+                lines.append(f"| {_value(decision['tool'])} | {_value(reason)} | {indexes} |")
 
     if report.get("next_checks"):
         lines.extend(["", "## Suggested read-only checks", ""])

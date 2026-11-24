@@ -5,11 +5,13 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import mkdtemp
 from threading import Thread
+from time import sleep
 from urllib.parse import parse_qs, urlsplit
 
 QUEUE_NAME = "orders"
@@ -18,6 +20,7 @@ QUEUE_PATH = "/api/queues/%2F/orders"
 
 class DemoServer(ThreadingHTTPServer):
     recovered = False
+    queue_delay = 0.0
 
 
 class DemoHandler(BaseHTTPRequestHandler):
@@ -29,34 +32,49 @@ class DemoHandler(BaseHTTPRequestHandler):
         if url.path in ("/service/health", "/consumer/health"):
             self._respond(204 if recovered else 503)
         elif url.path == QUEUE_PATH:
+            if self.server.queue_delay:
+                sleep(self.server.queue_delay)
             self._respond(200, {
                 "messages_ready": 0 if recovered else 3,
                 "messages_unacknowledged": 0,
                 "consumers": 1,
             })
-        elif url.path == "/processing" and parse_qs(url.query) == {"queue": [QUEUE_NAME], "vhost": ["/"]}:
-            self._respond(200, [{
+        elif url.path == "/processing":
+            query = parse_qs(url.query)
+            scope = {"queue": [QUEUE_NAME], "vhost": ["/"]}
+            message = "demo-order-101"
+            if query not in (scope, {**scope, "message_id": [message]}):
+                self._respond(404)
+                return
+            records = [{
                 "queue": QUEUE_NAME, "vhost": "/", "message_id": "demo-order-101",
                 "result": "succeeded" if recovered else "failed",
                 "attempted_at": "2026-11-19T03:00:00Z",
-            }])
+            }]
+            if "message_id" in query:
+                records.append({**records[0], "message_id": "another-order", "result": "succeeded",
+                                "attempted_at": "2026-11-19T04:00:00Z"})
+            self._respond(200, records)
         else:
             self._respond(404)
 
     def _respond(self, status: int, data: object = None) -> None:
         body = b"" if data is None else json.dumps(data).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        if body:
-            self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if body:
+                self.wfile.write(body)
+        except ConnectionError:
+            pass
 
     def log_message(self, format: str, *args: object) -> None:
         pass
 
 
-def run_demo(directory: Path) -> None:
+def run_demo(directory: Path, *, investigation: bool = False) -> None:
     database = directory / "reports.sqlite3"
     config = directory / "target.json"
     service_log = directory / "service.jsonl"
@@ -87,11 +105,15 @@ def run_demo(directory: Path) -> None:
             "rabbitmq": {
                 "management_url": base_url, "queue": QUEUE_NAME,
                 "consumer_health_url": consumer_url, "processing_url": f"{base_url}/processing",
+                **({"timeout_seconds": 0.5} if investigation else {}),
             },
         }, indent=2) + "\n", encoding="utf-8")
         thread = Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
+            if investigation:
+                _run_investigation_demo(directory, config, server, run_cli)
+                return
             for recovered in (False, True):
                 server.recovered = recovered
                 if recovered:
@@ -119,9 +141,40 @@ def run_demo(directory: Path) -> None:
     (directory / "queue-comparison.md").write_text(queue, encoding="utf-8")
 
 
+def _run_investigation_demo(
+    directory: Path, config: Path, server: DemoServer, run_cli: Callable[..., str],
+) -> None:
+    args = (
+        "diagnose-auto", "--workflow", "investigation", "--config", str(config),
+        "--message-id", "demo-order-101", "Why is this order delayed?",
+    )
+    (directory / "plan.json").write_text(run_cli(*args, "--plan"), encoding="utf-8")
+    for name, healthy, delay, options, expected_stop in (
+        ("healthy", True, 0.0, (), "service_healthy"),
+        ("fault", False, 0.0, (), "checks_complete"),
+        ("partial-timeout", False, 1.5, (), "checks_complete"),
+        ("step-budget", False, 0.0, ("--max-steps", "1"), "step_budget_exhausted"),
+        ("time-budget", False, 1.5, ("--max-seconds", "0.25"), "time_budget_exhausted"),
+    ):
+        server.recovered = healthy
+        server.queue_delay = delay
+        output = run_cli(*args, *options)
+        report = json.loads(output)
+        stop = report["investigation"]["stop_reason"]
+        if stop != expected_stop:
+            raise RuntimeError(f"{name} stopped with {stop}, expected {expected_stop}.")
+        if json.loads(run_cli("report", report["task_id"])) != report:
+            raise RuntimeError(f"{name} report readback changed the saved evidence.")
+        markdown = run_cli("report", report["task_id"], "--format", "markdown")
+        (directory / f"{name}.json").write_text(output, encoding="utf-8")
+        (directory / f"{name}.md").write_text(markdown, encoding="utf-8")
+        print(f"{name}: {report['task_id']} ({stop})", flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=Path(".opspilot/demo"))
+    parser.add_argument("--investigation", action="store_true", help="Run the cross-source investigation demo.")
     args = parser.parse_args()
 
     root = args.output_dir.absolute()
@@ -129,10 +182,14 @@ def main() -> None:
     directory = Path(mkdtemp(prefix="run-", dir=root))
     print(f"Demo output directory: {directory}", flush=True)
     try:
-        run_demo(directory)
+        run_demo(directory, investigation=args.investigation)
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
         parser.exit(1, f"Demo failed: {error}\n")
-    for name in ("reports.sqlite3", "health-comparison.md", "queue-comparison.md"):
+    files = (
+        ("reports.sqlite3", "plan.json") if args.investigation
+        else ("reports.sqlite3", "health-comparison.md", "queue-comparison.md")
+    )
+    for name in files:
         print(directory / name)
 
 

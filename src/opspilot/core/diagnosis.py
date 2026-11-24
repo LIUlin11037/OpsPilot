@@ -154,6 +154,7 @@ class ToolCall(_ToolCallFields, total=False):
 CheckCondition = Literal[
     "service_unhealthy", "service_unhealthy_or_unknown",
     "service_unhealthy_or_unknown_or_log_errors", "queue_activity",
+    "queue_activity_or_unavailable", "exact_message_after_service_issue",
 ]
 
 
@@ -251,7 +252,7 @@ class NextCheck(TypedDict):
     description: str
 
 
-DiagnosisWorkflow = Literal["http_health", "queue", "target_trace"]
+DiagnosisWorkflow = Literal["http_health", "queue", "target_trace", "investigation"]
 RequestedCheck = Literal["check_consumer_health", "check_dependencies", "check_service_log"]
 
 
@@ -264,6 +265,28 @@ class DiagnosisRoute(DiagnosisRouteFields, total=False):
     selected_by: Literal["message_id", "delivery_id", "voter_id", "entity_id", "workflow"] | RequestedCheck
 
 
+class InvestigationBudget(TypedDict):
+    max_steps: int
+    max_seconds: float
+
+
+class InvestigationDecision(TypedDict):
+    tool: ToolName
+    reason: str
+    evidence_indexes: list[int]
+
+
+InvestigationStopReason = Literal["service_healthy", "checks_complete", "step_budget_exhausted", "time_budget_exhausted"]
+
+
+class InvestigationDetails(TypedDict):
+    budget: InvestigationBudget
+    decisions: list[InvestigationDecision]
+    stop_reason: InvestigationStopReason
+    elapsed_ms: float
+    conflicting_evidence_indexes: list[int]
+
+
 class DiagnosisReport(DiagnosisReportFields, total=False):
     tool_calls: list[ToolCall]
     skipped_checks: list[SkippedCheck]
@@ -273,6 +296,7 @@ class DiagnosisReport(DiagnosisReportFields, total=False):
     routing: DiagnosisRoute
     planned_scope: dict[str, str | int]
     planned_checks: list[PlannedCheck]
+    investigation: InvestigationDetails
 
 
 _NEXT_CHECK_DESCRIPTIONS: dict[NextCheckAction, str] = {
@@ -290,7 +314,7 @@ def _next_check_action(evidence: Evidence) -> NextCheckAction | None:
     if evidence["outcome"] == "timeout":
         return "retry_read"
     if evidence["outcome"] == "missing":
-        if evidence.get("reason") in ("access_denied", "authentication_failed"):
+        if evidence.get("reason") in ("access_denied", "authentication_failed", "credentials_unconfigured"):
             return "verify_read_access"
         return "verify_source"
     if evidence.get("health") == "unhealthy":
