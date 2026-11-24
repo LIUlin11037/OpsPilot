@@ -22,6 +22,7 @@ from opspilot.adapters.simulated import SimulatedProcessingAdapter
 from opspilot.adapters.voting_snapshot import VotingSnapshotAdapter, parse_voter_id
 from opspilot.connectors.http_health import HttpHealthConnector
 from opspilot.connectors.jsonl_service_log import JsonlServiceLogConnector
+from opspilot.connectors.model_routing import model_from_environment
 from opspilot.connectors.mysql import MySQLConnector, MySQLHealthConnector, mysql_health_endpoint
 from opspilot.connectors.rabbitmq import RabbitMQQueueConnector, queue_endpoint
 from opspilot.connectors.redis_health import RedisHealthConnector
@@ -44,6 +45,7 @@ from opspilot.core.diagnosis import (
 )
 from opspilot.core.health_diagnosis import run_health_diagnosis
 from opspilot.core.investigation import InvestigationTool, run_investigation, unavailable_read
+from opspilot.core.model_routing import REQUEST_FIELDS, AdvisableWorkflow
 from opspilot.core.startup import run_startup
 from opspilot.core.target_trace import run_target_trace
 from opspilot.core.triage import select_diagnosis_route
@@ -60,6 +62,7 @@ from opspilot.report_markdown import (
     render_queue_comparison_markdown,
     render_voting_comparison_markdown,
 )
+from opspilot.routing_evaluation import evaluate_routing, model_qualified
 from opspilot.target_config import RabbitMQTargetConfig, TargetConfig, load_target_config
 from opspilot.task_store import StoredReport, list_reports, load_report, save_report
 
@@ -556,15 +559,48 @@ def _prepare_auto_diagnosis(
         }
         return plan, run_snapshot
 
-    routing = select_diagnosis_route(
-        question, message_lookup=args.message_id is not None, workflow=args.workflow,
-        requested_check=requested_check,
-    )
+    target = None
+    try:
+        routing = select_diagnosis_route(
+            question, message_lookup=args.message_id is not None, workflow=args.workflow,
+            requested_check=requested_check,
+        )
+    except ValueError as rule_error:
+        if (
+            args.model_routing is None or args.plan or args.workflow is not None
+            or requested_check is not None or args.message_id is not None
+        ):
+            raise
+        target = load_target_config(args.config) if args.config is not None else None
+        candidates: list[AdvisableWorkflow] = []
+        if args.health_config is not None or (target is not None and target.health is not None):
+            candidates.append("http_health")
+        if args.management_url is not None or (target is not None and target.rabbitmq is not None):
+            candidates.append("queue")
+        if not candidates:
+            raise
+        try:
+            model = model_from_environment()
+        except ValueError as error:
+            raise ValueError(f"{rule_error} Model assistance unavailable. {error}") from error
+        if not model_qualified(args.model_routing, model):
+            raise ValueError(f"{rule_error} Model assistance requires a passing evaluation for this model.") from rule_error
+        suggestion = model.suggest(question, tuple(candidates))
+        if suggestion.workflow is None:
+            raise ValueError(f"{rule_error} Model assistance returned {suggestion.reason}.") from rule_error
+        routing = {
+            "workflow": suggestion.workflow, "matched_terms": [], "selected_by": "qualified_model",
+            "model": {
+                "model": model.model, "request_data": list(REQUEST_FIELDS), "elapsed_ms": suggestion.elapsed_ms,
+                "input_tokens": suggestion.input_tokens, "output_tokens": suggestion.output_tokens,
+            },
+        }
     if health_option is not None and routing["workflow"] != "http_health":
         raise ValueError(f"{health_option} requires the HTTP health workflow")
     if args.check_consumer_health and routing["workflow"] != "queue":
         raise ValueError(_CONSUMER_HEALTH_WORKFLOW_REQUIRED)
-    target = load_target_config(args.config) if args.config is not None else None
+    if target is None and args.config is not None:
+        target = load_target_config(args.config)
     if routing["workflow"] == "http_health":
         config = target.health if target is not None else None
         if args.health_config is not None:
@@ -753,6 +789,10 @@ def main() -> None:
     )
     auto_diagnose.add_argument("--max-steps", type=int, help="Maximum investigation reads (default: 4).")
     auto_diagnose.add_argument("--max-seconds", type=float, help="Investigation time budget in seconds (default: 15).")
+    auto_diagnose.add_argument(
+        "--model-routing", type=Path, metavar="EVALUATION_JSON",
+        help="Allow a qualified model to suggest a workflow when the rules need clarification.",
+    )
     _add_queue_options(auto_diagnose)
     auto_scope = auto_diagnose.add_mutually_exclusive_group()
     auto_scope.add_argument("--message-id", help="Look up an exact message in the configured processing source.")
@@ -879,11 +919,21 @@ def main() -> None:
     )
     inspect_queue.add_argument("--management-url", required=True)
     _add_queue_options(inspect_queue, require_queue=True)
+    evaluate = commands.add_parser("evaluate-routing", help="Evaluate routing on the bundled synthetic cases.")
+    evaluate.add_argument("--rules-only", action="store_true", help="Run the rule baseline without contacting a model.")
     args = parser.parse_args()
 
     if args.command is None:
         state = run_startup()
         print(f"OpsPilot is {state['status']}.")
+        return
+
+    if args.command == "evaluate-routing":
+        try:
+            model = None if args.rules_only else model_from_environment()
+        except ValueError as error:
+            evaluate.error(str(error))
+        print(json.dumps(evaluate_routing(model), indent=2, ensure_ascii=True))
         return
 
     if args.command == "capture-hirehub":

@@ -261,8 +261,17 @@ class DiagnosisRouteFields(TypedDict):
     matched_terms: list[str]
 
 
+class ModelRoutingEvidence(TypedDict):
+    model: str
+    request_data: list[str]
+    elapsed_ms: float
+    input_tokens: int | None
+    output_tokens: int | None
+
+
 class DiagnosisRoute(DiagnosisRouteFields, total=False):
-    selected_by: Literal["message_id", "delivery_id", "voter_id", "entity_id", "workflow"] | RequestedCheck
+    selected_by: Literal["message_id", "delivery_id", "voter_id", "entity_id", "workflow", "qualified_model"] | RequestedCheck
+    model: ModelRoutingEvidence
 
 
 class InvestigationBudget(TypedDict):

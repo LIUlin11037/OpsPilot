@@ -22,6 +22,7 @@ _ROUTE_BASES = {
     "voter_id": "Requested voter ID",
     "entity_id": "Requested entity ID",
     "workflow": "Explicit workflow",
+    "qualified_model": "Qualified model suggestion",
     "check_consumer_health": "--check-consumer-health",
     "check_dependencies": "--check-dependencies",
     "check_service_log": "--check-service-log",
@@ -295,6 +296,10 @@ def render_markdown(report: StoredReport) -> str:
             lines.append(f"- **Selection basis** {basis}")
         if routing["matched_terms"]:
             lines.append(f"- **Matched terms** {_value(routing['matched_terms'])}")
+        if "model" in routing:
+            model = routing["model"]
+            lines.append(f"- **Routing model** {_value(model['model'])}")
+            lines.append(f"- **Data sent for routing** {_value(model['request_data'])}")
     if correlation is not None:
         lines.append(f"- **Message correlation** {_value(correlation)}")
     if "requested_message_id" in report:

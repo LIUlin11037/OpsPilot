@@ -23,6 +23,8 @@ python -m venv .venv
 
 多步调查在第一次读取前就会分配任务 ID。用 `task` 查看进度，`resume` 续跑原任务，`recheck` 按原计划重新采集并保存新报告。[任务恢复与复查](docs/v0.5-investigation-recovery.md)
 
+模型辅助选路默认关闭。用 `evaluate-routing` 对比规则和模型，只有通过评测的模型才能通过 `--model-routing` 显式启用。[模型选路评测与结果](docs/v0.6-model-routing.md)
+
 把常用目标保存为 UTF-8 的 `target.json`。可以按需配置 `health`、`rabbitmq`、`hirehub`、`voting` 和 `order`。`health` 使用 HTTP 健康配置字段，`rabbitmq` 需要管理地址与队列名，虚拟主机默认为 `/`，超时默认为 5 秒。RabbitMQ 和 MySQL 凭据通过环境变量提供。
 
 ```json

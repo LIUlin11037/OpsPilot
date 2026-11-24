@@ -33,7 +33,9 @@ v0.1 已有手动提交任务、按症状词和显式参数路由、流程内按
 
 v0.2 已通过模型独立验收。v0.3 已在隔离订单履约样例中验证通用追踪流程可迁移。[v0.2 验收记录](v0.2-onboarding-acceptance.md) · [v0.3 验收记录](v0.3-order-fulfillment.md)
 
-v0.4 已通过 HTTP、队列、消费者和处理记录的跨来源隔离验收。v0.5 已验证多步调查的进程中断恢复、并发恢复和新一轮复查。v0.6 可在工具契约稳定后单独评估。[v0.4 验收记录](v0.4-investigation.md) · [v0.5 验收记录](v0.5-investigation-recovery.md)
+v0.4 已通过跨来源隔离验收，v0.5 已验证中断恢复、并发恢复和复查。[v0.4 验收记录](v0.4-investigation.md) · [v0.5 验收记录](v0.5-investigation-recovery.md)
+
+v0.6 已完成选路对照评测，所测 Qwen 模型未达到启用门槛。v1.0 验收可使用规则路径。[v0.6 评测记录](v0.6-model-routing.md)
 
 ## v0.2 的交付任务
 
