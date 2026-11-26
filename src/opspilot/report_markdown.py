@@ -295,7 +295,10 @@ def _planned_check_lines(checks: list[PlannedCheck], calls: list[ToolCall] | Non
         condition = _value(_PLAN_CONDITIONS.get(check["when"], check["when"]))
         sources = check.get("sources")
         if sources:
-            for source, count in Counter(sources).items():
+            configured_sources = Counter(sources)
+            if len(configured_sources) == 1:
+                configured_sources[sources[0]] = check["count"]
+            for source, count in configured_sources.items():
                 recorded = recorded_sources[tool, source] if calls is not None and tool not in unscoped_tools else None
                 lines.append(f"| {_value(tool)} | {_value(source)} | {condition} | {count} | {_value(recorded)} |")
         else:

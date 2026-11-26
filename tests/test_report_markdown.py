@@ -123,3 +123,27 @@ def test_markdown_supports_reports_saved_before_tool_call_sources(report_db: Pat
         assert "## Tool calls" not in output
     assert "## Skipped checks" not in output
     assert "## Suggested read-only checks" not in output
+
+
+def test_markdown_preserves_configured_queries_sharing_a_source(report_db: Path) -> None:
+    endpoint = "http://127.0.0.1:9090/api/v1/query_range"
+    report: DiagnosisReport = {
+        "question": "Review service metrics",
+        "status": "no_failure_observed",
+        "conclusion": "Both metric queries completed.",
+        "processing_correlation": None,
+        "evidence": [],
+        "planned_checks": [{
+            "tool": "inspect_service_metrics", "when": "always", "count": 2, "sources": [endpoint],
+        }],
+        "tool_calls": [
+            {"tool": "inspect_service_metrics", "outcome": "observed", "duration_ms": 1, "source": endpoint}
+            for _ in range(2)
+        ],
+    }
+    stored = save_report(report_db, report)
+
+    output = _read_report(report_db, stored["task_id"], "--format", "markdown")
+
+    assert r"| inspect\_service\_metrics | http://127.0.0.1:9090/api/v1/query\_range | Always | 2 | 2 |" in output
+    assert json.loads(_read_report(report_db, stored["task_id"])) == stored
