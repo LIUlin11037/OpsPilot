@@ -1,0 +1,35 @@
+services:
+  traefik:
+    image: traefik:v3.8.0@sha256:00c9734983e74ae35a1fc18eaee9e9da13f3dde95c4e45b3b8c3b60e0dbd2d17
+    command:
+      - --entrypoints.web.address=:8080
+      - --entrypoints.metrics.address=:8082
+      - --providers.file.filename=/etc/traefik/routes.yml
+      - --providers.file.watch=false
+      - --serverstransport.forwardingtimeouts.dialtimeout=1s
+      - --serverstransport.forwardingtimeouts.responseheadertimeout=2s
+      - --metrics.prometheus=true
+      - --metrics.prometheus.entrypoint=metrics
+      - --metrics.prometheus.addserviceslabels=true
+      - --metrics.prometheus.addentrypointslabels=false
+      - --accesslog=true
+      - --accesslog.format=json
+      - --accesslog.fields.defaultmode=drop
+      - --accesslog.fields.names.StartUTC=keep
+      - --accesslog.fields.names.ServiceName=keep
+      - --accesslog.fields.names.DownstreamStatus=keep
+    volumes:
+      - ./routes.yml:/etc/traefik/routes.yml:ro
+    ports:
+      - "127.0.0.1:18771:8080"
+  orders:
+    image: nginx@sha256:84f7876d21d154885f99554d7ae325d8c2213f9169726ea7ab60642f2573a787
+  neighbor:
+    image: nginx@sha256:84f7876d21d154885f99554d7ae325d8c2213f9169726ea7ab60642f2573a787
+  prometheus:
+    image: prom/prometheus:v3.13.5@sha256:aafa9d694e6a883c02db516d9f6e5b84e14195f49a2a6456a4cca815edda72b9
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:18772:9090"

@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 2s
+
+scrape_configs:
+  - job_name: orders
+    static_configs:
+      - targets: ["traefik:8082"]
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: traefik_service_requests_total|traefik_service_request_duration_seconds_bucket
+        action: keep
+      - source_labels: [service]
+        regex: orders@file
+        action: keep
+      - source_labels: [code]
+        regex: ([1-5][0-9][0-9])
+        target_label: status

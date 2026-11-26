@@ -1,0 +1,28 @@
+http:
+  routers:
+    orders:
+      entryPoints: [web]
+      rule: "PathPrefix(`/orders/`)"
+      middlewares: [orders-prefix]
+      service: orders
+    neighbor:
+      entryPoints: [web]
+      rule: "PathPrefix(`/neighbor/`)"
+      middlewares: [neighbor-prefix]
+      service: neighbor
+  middlewares:
+    orders-prefix:
+      stripPrefix:
+        prefixes: [/orders]
+    neighbor-prefix:
+      stripPrefix:
+        prefixes: [/neighbor]
+  services:
+    orders:
+      loadBalancer:
+        servers:
+          - url: http://orders:80
+    neighbor:
+      loadBalancer:
+        servers:
+          - url: http://neighbor:80
