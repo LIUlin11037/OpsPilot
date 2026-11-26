@@ -72,9 +72,9 @@ def _check_dependencies(tools: Sequence[HealthTool], _state: _HealthState) -> _H
     return {"dependencies": dependencies, "tool_calls": calls}
 
 
-def _check_service_log(tool: ServiceLogTool, state: _HealthState) -> _HealthState:
+def _check_service_log(read_log: Callable[[str], ServiceLogRead], state: _HealthState) -> _HealthState:
     read, duration_ms = measure_tool_call(
-        partial(tool.inspect_recent_errors, state["service"]["observed_at"])
+        partial(read_log, state["service"]["observed_at"])
     )
     evidence: ServiceLogEvidence = {**read, "tool": "inspect_service_log"}
     return {"service_log": evidence, "tool_calls": [tool_call_from_evidence(evidence, duration_ms)]}
@@ -196,7 +196,7 @@ def run_health_diagnosis(
     dependency: HealthTool | Sequence[HealthTool] | None = None,
     *,
     check_dependencies: bool = False,
-    service_log: ServiceLogTool | None = None,
+    service_log: ServiceLogTool | Callable[[str], ServiceLogRead] | None = None,
     check_service_log: bool = False,
     metric_checks: tuple[MetricCheck, ...] = (),
     check_metrics: bool = False,
@@ -233,7 +233,8 @@ def run_health_diagnosis(
         graph.add_edge("check_dependencies", after_checks)
         routes["check_dependencies"] = "check_dependencies"
     if service_log is not None:
-        graph.add_node("check_service_log", partial(_check_service_log, service_log))
+        read_log = service_log if callable(service_log) else service_log.inspect_recent_errors
+        graph.add_node("check_service_log", partial(_check_service_log, read_log))
         graph.add_conditional_edges(
             "check_service_log",
             partial(

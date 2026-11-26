@@ -45,6 +45,7 @@ from opspilot.core.diagnosis import (
     run_queue_diagnosis,
 )
 from opspilot.core.health_diagnosis import MetricCheck, run_health_diagnosis
+from opspilot.core.incident_report import summarize_incident
 from opspilot.core.incident_window import IncidentWindow, parse_incident_window
 from opspilot.core.investigation import InvestigationTool, run_investigation, unavailable_read
 from opspilot.core.model_routing import REQUEST_FIELDS, AdvisableWorkflow
@@ -281,6 +282,16 @@ def _http_health_tool(url: str, timeout_seconds: float, field: str) -> HttpHealt
         raise ValueError(f"{field}: {error}") from error
 
 
+def _configured_metric_checks(
+    metrics: PrometheusConfig, window: IncidentWindow | None = None,
+) -> tuple[MetricCheck, ...]:
+    connector = PrometheusConnector(metrics, os.getenv("OPSPILOT_PROMETHEUS_TOKEN"))
+    return tuple(
+        MetricCheck(metrics.endpoint, query.name, partial(connector.inspect, query, window=window))
+        for query in metrics.queries
+    )
+
+
 def _run_configured_health(
     question: str, config: HealthConfig, *, check_dependencies: bool = False,
     check_service_log: bool = False,
@@ -303,12 +314,7 @@ def _run_configured_health(
             MySQLHealthConnector(url, username, password, config.timeout_seconds)
             for url in config.mysql_dependency_urls
         )
-    metric_checks: tuple[MetricCheck, ...] = ()
-    if metrics is not None:
-        connector = PrometheusConnector(metrics, os.getenv("OPSPILOT_PROMETHEUS_TOKEN"))
-        metric_checks = tuple(
-            MetricCheck(metrics.endpoint, query.name, partial(connector.inspect, query)) for query in metrics.queries
-        )
+    metric_checks = _configured_metric_checks(metrics) if metrics is not None else ()
     return run_health_diagnosis(
         question, service, dependencies, check_dependencies=check_dependencies,
         service_log=JsonlServiceLogConnector(config.service_log_path) if config.service_log_path is not None else None,
@@ -316,6 +322,18 @@ def _run_configured_health(
         metric_checks=metric_checks, check_metrics=check_metrics,
         metric_budget_seconds=metrics.timeout_seconds if metrics is not None else 5.0,
     )
+
+
+def _run_incident_window(
+    question: str, service: HealthTool, log_path: Path, metrics: PrometheusConfig, window: IncidentWindow,
+) -> DiagnosisReport:
+    log = JsonlServiceLogConnector(log_path)
+    report = run_health_diagnosis(
+        question, service, service_log=lambda _: log.inspect_window(window, metrics.service),
+        check_service_log=True, metric_checks=_configured_metric_checks(metrics, window),
+        check_metrics=True, metric_budget_seconds=metrics.timeout_seconds,
+    )
+    return summarize_incident(report, window, metrics.service)
 
 
 def _investigation_request(target: TargetConfig, message_id: str | None) -> InvestigationRequest:
@@ -513,10 +531,7 @@ def _prepare_incident_window(
         ],
     }
 
-    def run_incident() -> DiagnosisReport:
-        raise ValueError("Incident windows are currently available in plan previews only.")
-
-    return plan, run_incident
+    return plan, partial(_run_incident_window, question, service, health.service_log_path, metrics, window)
 
 
 def _prepare_auto_diagnosis(

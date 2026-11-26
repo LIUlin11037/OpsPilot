@@ -27,9 +27,13 @@ _ROUTE_BASES = {
     "check_dependencies": "--check-dependencies",
     "check_service_log": "--check-service-log",
     "check_metrics": "--check-metrics",
+    "incident_window": "Requested incident window",
 }
 _SCOPE_LABELS = {
     "service_url": "Service URL",
+    "service": "Service",
+    "incident_start": "Incident start",
+    "incident_end": "Incident end",
     "queue_source": "Queue source",
     "queue": "Queue",
     "vhost": "Virtual host",
@@ -72,6 +76,9 @@ _EVIDENCE_FIELDS = {
     "error_count": "Error-level entries",
     "window_start": "Window start",
     "window_end": "Window end",
+    "evaluation_start": "First metric evaluation time",
+    "matched_entries": "Matched service log entries",
+    "unscoped_entries": "Log entries without service attribution",
     "query_name": "Query",
     "service": "Service",
     "unit": "Unit",
@@ -349,6 +356,22 @@ def render_markdown(report: StoredReport) -> str:
             for branch, status in trace["branches"].items()
         )
 
+    incident = report.get("incident")
+    if incident is not None:
+        lines.extend([
+            "", "## Incident window", "",
+            f"- **Service** {_value(incident['service'])}",
+            f"- **Start** {_value(incident['window_start'])}",
+            f"- **End** {_value(incident['window_end'])}",
+            f"- **Current endpoint health** {_value(incident['current_health'])} "
+            f"(evidence {incident['current_evidence_index']})",
+            f"- **Historical observation** {_value(incident['window_status'])}",
+            f"- **Historical evidence indexes** {_value(incident['window_evidence_indexes'])}",
+            f"- **Anomaly evidence indexes** {_value(incident['anomaly_evidence_indexes'])}",
+            f"- **Incomplete evidence indexes** {_value(incident['unavailable_evidence_indexes'])}",
+            f"- **Stop reason** {_value(incident['stop_reason'])}",
+        ])
+
     investigation = report.get("investigation")
     if investigation is not None:
         budget = investigation["budget"]
@@ -388,14 +411,17 @@ def render_markdown(report: StoredReport) -> str:
 
     lines.extend(["", "## Evidence", ""])
     if report["evidence"]:
+        index_header = "Index | " if incident is not None else ""
+        index_separator = "---: | " if incident is not None else ""
         lines.extend([
-            "| Check | Outcome | Details | Origin | Source | Observed at |",
-            "| --- | --- | --- | --- | --- | --- |",
+            f"| {index_header}Check | Outcome | Details | Origin | Source | Observed at |",
+            f"| {index_separator}--- | --- | --- | --- | --- | --- |",
         ])
-        for item in report["evidence"]:
+        for index, item in enumerate(report["evidence"]):
             check = item.get("checkpoint", item["tool"])
+            index_column = f"{index} | " if incident is not None else ""
             lines.append(
-                f"| {_value(check)} | {_value(item['outcome'])} | {_evidence_details(item)} | "
+                f"| {index_column}{_value(check)} | {_value(item['outcome'])} | {_evidence_details(item)} | "
                 f"{_value(item.get('origin', ''))} | {_value(item['source'])} | "
                 f"{_value(item['observed_at'])} |"
             )

@@ -9,6 +9,7 @@ from typing import Annotated, Literal, Protocol, TypedDict, TypeVar
 
 from langgraph.graph import END, START, StateGraph
 
+from opspilot.core.incident_report import IncidentDetails
 from opspilot.core.metrics import MetricRead
 
 UnavailableOutcome = Literal["timeout", "missing"]
@@ -344,6 +345,7 @@ class DiagnosisReport(DiagnosisReportFields, total=False):
     planned_scope: dict[str, str | int]
     planned_checks: list[PlannedCheck]
     investigation: InvestigationDetails
+    incident: IncidentDetails
     previous_task_id: str
 
 
