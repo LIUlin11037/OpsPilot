@@ -272,6 +272,8 @@ HTTP 健康诊断可以从同一服务的 Prometheus 查询补充错误率和 p9
 
 用 `--incident-start` 和 `--incident-end` 查看过去同一时段的指标和服务日志，并同时获取当前 HTTP 观测。[故障时段调查](docs/v1.2-incident-window.md)
 
+Traefik 隔离示例提供完整的首次配置、故障对照和历史复查步骤。[跨项目接入指南](docs/v1.3-independent-traefik.md)
+
 ## 只读查询 RabbitMQ 队列
 
 在已启用 Management API 的 RabbitMQ 环境中，将查询凭据提供给进程的 `OPSPILOT_RABBITMQ_USER` 和 `OPSPILOT_RABBITMQ_PASSWORD` 环境变量。以下命令使用本机地址和默认虚拟主机。
