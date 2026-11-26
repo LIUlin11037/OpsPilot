@@ -270,6 +270,8 @@ JSON 报告包含任务 ID、用户提交的问题、诊断状态和结论。每
 
 HTTP 健康诊断可以从同一服务的 Prometheus 查询补充错误率和 p95 延迟，恢复后可显式复查并按任务 ID 对比。[配置与隔离验收](docs/v1.1-prometheus.md)
 
+用 `--incident-start` 和 `--incident-end` 查看过去同一时段的指标和服务日志，并同时获取当前 HTTP 观测。[故障时段调查](docs/v1.2-incident-window.md)
+
 ## 只读查询 RabbitMQ 队列
 
 在已启用 Management API 的 RabbitMQ 环境中，将查询凭据提供给进程的 `OPSPILOT_RABBITMQ_USER` 和 `OPSPILOT_RABBITMQ_PASSWORD` 环境变量。以下命令使用本机地址和默认虚拟主机。

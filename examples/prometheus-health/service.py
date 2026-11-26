@@ -1,6 +1,8 @@
 """Serve deterministic HTTP and metrics observations for the isolated example."""
 
+import json
 from collections import Counter
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock
@@ -22,6 +24,10 @@ def record(status: int, latency: float) -> None:
         for bucket in BUCKETS:
             if latency <= bucket:
                 LATENCY_BUCKETS[bucket] += 1
+        print(json.dumps({
+            "timestamp": datetime.now(timezone.utc).isoformat(), "service": "orders",
+            "level": "ERROR" if status == 503 else "INFO", "http_status": status,
+        }), flush=True)
 
 
 def metrics() -> bytes:
