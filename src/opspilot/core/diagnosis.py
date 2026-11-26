@@ -189,6 +189,7 @@ class PlannedCheck(_PlannedCheckFields, total=False):
     window_seconds: int
     step_seconds: int
     timeout_seconds: int
+    evaluation_start: str
 
 
 class _SkippedCheckFields(TypedDict):
@@ -294,7 +295,9 @@ class ModelRoutingEvidence(TypedDict):
 
 
 class DiagnosisRoute(DiagnosisRouteFields, total=False):
-    selected_by: Literal["message_id", "delivery_id", "voter_id", "entity_id", "workflow", "qualified_model"] | RequestedCheck
+    selected_by: Literal[
+        "message_id", "delivery_id", "voter_id", "entity_id", "workflow", "qualified_model", "incident_window"
+    ] | RequestedCheck
     model: ModelRoutingEvidence
 
 

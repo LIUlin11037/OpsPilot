@@ -45,6 +45,7 @@ from opspilot.core.diagnosis import (
     run_queue_diagnosis,
 )
 from opspilot.core.health_diagnosis import MetricCheck, run_health_diagnosis
+from opspilot.core.incident_window import IncidentWindow, parse_incident_window
 from opspilot.core.investigation import InvestigationTool, run_investigation, unavailable_read
 from opspilot.core.model_routing import REQUEST_FIELDS, AdvisableWorkflow
 from opspilot.core.startup import run_startup
@@ -456,12 +457,76 @@ def _start_investigation(
     return _run_saved_investigation(database, task["task_id"], announce=True)
 
 
+def _metric_plan_check(
+    metrics: PrometheusConfig, *, always: bool, window: IncidentWindow | None = None,
+) -> PlannedCheck:
+    check: PlannedCheck = {
+        "tool": "inspect_service_metrics", "when": "always" if always else "service_unhealthy_or_unknown",
+        "count": len(metrics.queries), "sources": [metrics.endpoint],
+        "service": metrics.service,
+        "queries": [
+            {"name": query.name, "metric": query.metric, "unit": query.unit, "threshold": query.threshold}
+            for query in metrics.queries
+        ],
+        "window_seconds": metrics.window_seconds, "step_seconds": metrics.step_seconds,
+        "timeout_seconds": metrics.timeout_seconds,
+    }
+    if window is not None:
+        check["window_seconds"] = window.duration_seconds
+        check["step_seconds"] = window.metric_step(metrics.step_seconds)
+        check["evaluation_start"] = window.evaluation_start.isoformat()
+    return check
+
+
+def _prepare_incident_window(
+    args: argparse.Namespace, question: str,
+) -> tuple[DiagnosisPlan, Callable[[], DiagnosisReport]]:
+    window = parse_incident_window(args.incident_start, args.incident_end)
+    if args.config is None:
+        raise ValueError("An incident window requires --config.")
+    other_workflow = args.workflow not in (None, "http_health") or any(option is not None for option in (
+        args.message_id, args.delivery_id, args.voter_id, args.order_id,
+        args.health_config, args.management_url, args.queue, args.vhost, args.timeout,
+        args.max_steps, args.max_seconds, args.model_routing,
+    ))
+    if other_workflow or any((args.check_dependencies, args.check_service_log, args.check_metrics, args.check_consumer_health)):
+        raise ValueError("An incident window selects its own HTTP, log and metric checks.")
+    target = load_target_config(args.config)
+    health, metrics = target.health, target.prometheus
+    if health is None or health.service_log_path is None or metrics is None:
+        raise ValueError("An incident window requires health.service_log_path and a prometheus section in --config.")
+    service = _http_health_tool(health.service_url, health.timeout_seconds, "service_url")
+    plan: DiagnosisPlan = {
+        "question": question,
+        "routing": {"workflow": "http_health", "matched_terms": [], "selected_by": "incident_window"},
+        "scope": {
+            "service_url": service.endpoint, "service": metrics.service,
+            "incident_start": window.start.isoformat(), "incident_end": window.end.isoformat(),
+        },
+        "checks": [
+            {"tool": "inspect_service_health", "when": "always", "count": 1, "sources": [service.endpoint]},
+            {
+                "tool": "inspect_service_log", "when": "always", "count": 1,
+                "sources": [health.service_log_path.as_uri()], "service": metrics.service,
+            },
+            _metric_plan_check(metrics, always=True, window=window),
+        ],
+    }
+
+    def run_incident() -> DiagnosisReport:
+        raise ValueError("Incident windows are currently available in plan previews only.")
+
+    return plan, run_incident
+
+
 def _prepare_auto_diagnosis(
     args: argparse.Namespace, parser: argparse.ArgumentParser,
 ) -> tuple[DiagnosisPlan, Callable[[], DiagnosisReport]]:
     question = args.question.strip()
     if not question:
         raise ValueError("question must not be empty")
+    if args.incident_start is not None or args.incident_end is not None:
+        return _prepare_incident_window(args, question)
     if args.message_id is not None:
         if not args.message_id.strip():
             raise ValueError("--message-id must not be empty")
@@ -660,18 +725,7 @@ def _prepare_auto_diagnosis(
         if args.check_metrics and metrics is None:
             raise ValueError("--check-metrics requires a prometheus section in --config")
         if metrics is not None:
-            checks.append({
-                "tool": "inspect_service_metrics",
-                "when": "always" if args.check_metrics else "service_unhealthy_or_unknown",
-                "count": len(metrics.queries), "sources": [metrics.endpoint],
-                "service": metrics.service,
-                "queries": [
-                    {"name": query.name, "metric": query.metric, "unit": query.unit, "threshold": query.threshold}
-                    for query in metrics.queries
-                ],
-                "window_seconds": metrics.window_seconds, "step_seconds": metrics.step_seconds,
-                "timeout_seconds": metrics.timeout_seconds,
-            })
+            checks.append(_metric_plan_check(metrics, always=args.check_metrics))
         plan = {"question": question, "routing": routing, "scope": {"service_url": service.endpoint}, "checks": checks}
         return plan, partial(
             _run_configured_health, question, config,
@@ -815,6 +869,8 @@ def main() -> None:
     auto_diagnose.add_argument("--management-url", help="RabbitMQ Management API base URL.")
     auto_diagnose.add_argument("--plan", action="store_true", help="Show the selected workflow and its configured checks.")
     auto_diagnose.add_argument("--check-metrics", action="store_true", help="Check configured service metrics explicitly.")
+    auto_diagnose.add_argument("--incident-start", help="Start of the historical window, in ISO 8601 with a time zone.")
+    auto_diagnose.add_argument("--incident-end", help="End of the historical window, in ISO 8601 with a time zone.")
     auto_diagnose.add_argument(
         "--workflow", choices=("http_health", "queue", "investigation"), help="Select a workflow explicitly.",
     )
