@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opspilot"
-version = "1.0.0rc1"
+version = "1.3.0rc1"
 description = "Evidence-based incident diagnosis for heterogeneous microservices."
 readme = "README.md"
 requires-python = ">=3.10"
