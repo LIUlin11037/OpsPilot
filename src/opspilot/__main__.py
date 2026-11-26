@@ -24,6 +24,7 @@ from opspilot.connectors.http_health import HttpHealthConnector
 from opspilot.connectors.jsonl_service_log import JsonlServiceLogConnector
 from opspilot.connectors.model_routing import model_from_environment
 from opspilot.connectors.mysql import MySQLConnector, MySQLHealthConnector, mysql_health_endpoint
+from opspilot.connectors.prometheus import PrometheusConnector
 from opspilot.connectors.rabbitmq import RabbitMQQueueConnector, queue_endpoint
 from opspilot.connectors.redis_health import RedisHealthConnector
 from opspilot.connectors.simulated import SimulatedQueueConnector
@@ -43,7 +44,7 @@ from opspilot.core.diagnosis import (
     run_diagnosis,
     run_queue_diagnosis,
 )
-from opspilot.core.health_diagnosis import run_health_diagnosis
+from opspilot.core.health_diagnosis import MetricCheck, run_health_diagnosis
 from opspilot.core.investigation import InvestigationTool, run_investigation, unavailable_read
 from opspilot.core.model_routing import REQUEST_FIELDS, AdvisableWorkflow
 from opspilot.core.startup import run_startup
@@ -53,6 +54,7 @@ from opspilot.health_config import DEFAULT_HEALTH_TIMEOUT_SECONDS, HealthConfig,
 from opspilot.investigation_store import (
     InvestigationBusyError, InvestigationRequest, TaskJournal, create_task, load_task, lock_task,
 )
+from opspilot.prometheus_config import PrometheusConfig
 from opspilot.report_comparison import (
     compare_health_reports, compare_queue_reports, compare_trace_reports, compare_voting_reports,
 )
@@ -281,6 +283,7 @@ def _http_health_tool(url: str, timeout_seconds: float, field: str) -> HttpHealt
 def _run_configured_health(
     question: str, config: HealthConfig, *, check_dependencies: bool = False,
     check_service_log: bool = False,
+    metrics: PrometheusConfig | None = None, check_metrics: bool = False,
 ) -> DiagnosisReport:
     _validate_health_rechecks(
         config, check_dependencies=check_dependencies, check_service_log=check_service_log,
@@ -299,10 +302,18 @@ def _run_configured_health(
             MySQLHealthConnector(url, username, password, config.timeout_seconds)
             for url in config.mysql_dependency_urls
         )
+    metric_checks: tuple[MetricCheck, ...] = ()
+    if metrics is not None:
+        connector = PrometheusConnector(metrics, os.getenv("OPSPILOT_PROMETHEUS_TOKEN"))
+        metric_checks = tuple(
+            MetricCheck(metrics.endpoint, query.name, partial(connector.inspect, query)) for query in metrics.queries
+        )
     return run_health_diagnosis(
         question, service, dependencies, check_dependencies=check_dependencies,
         service_log=JsonlServiceLogConnector(config.service_log_path) if config.service_log_path is not None else None,
         check_service_log=check_service_log,
+        metric_checks=metric_checks, check_metrics=check_metrics,
+        metric_budget_seconds=metrics.timeout_seconds if metrics is not None else 5.0,
     )
 
 
@@ -649,8 +660,6 @@ def _prepare_auto_diagnosis(
         if args.check_metrics and metrics is None:
             raise ValueError("--check-metrics requires a prometheus section in --config")
         if metrics is not None:
-            if not args.plan:
-                raise ValueError("Prometheus metrics are currently available in plan previews only.")
             checks.append({
                 "tool": "inspect_service_metrics",
                 "when": "always" if args.check_metrics else "service_unhealthy_or_unknown",
@@ -667,6 +676,7 @@ def _prepare_auto_diagnosis(
         return plan, partial(
             _run_configured_health, question, config,
             check_dependencies=args.check_dependencies, check_service_log=args.check_service_log,
+            metrics=metrics, check_metrics=args.check_metrics,
         )
 
     rabbitmq = target.rabbitmq if target is not None else None

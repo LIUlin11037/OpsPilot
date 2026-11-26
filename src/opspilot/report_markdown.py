@@ -26,6 +26,7 @@ _ROUTE_BASES = {
     "check_consumer_health": "--check-consumer-health",
     "check_dependencies": "--check-dependencies",
     "check_service_log": "--check-service-log",
+    "check_metrics": "--check-metrics",
 }
 _SCOPE_LABELS = {
     "service_url": "Service URL",
@@ -71,6 +72,16 @@ _EVIDENCE_FIELDS = {
     "error_count": "Error-level entries",
     "window_start": "Window start",
     "window_end": "Window end",
+    "query_name": "Query",
+    "service": "Service",
+    "unit": "Unit",
+    "trigger": "Trigger",
+    "threshold": "Threshold",
+    "threshold_exceeded": "Threshold exceeded",
+    "sample_count": "Samples",
+    "latest_sample_at": "Latest sample at",
+    "latest_value": "Latest value",
+    "peak_value": "Peak value",
     "status": "State",
     "pending_messages": "Pending messages",
     "unacknowledged_messages": "Unacknowledged messages",
@@ -246,6 +257,17 @@ def render_health_comparison_markdown(comparison: HealthComparison) -> str:
                 )
         else:
             lines.append("No changes in recorded service log observations.")
+    if "metric_comparisons" in comparison:
+        lines.extend([
+            "", "## Metric observations", "",
+            "| Service | Query | Baseline | Follow-up |", "| --- | --- | --- | --- |",
+        ])
+        for pair in comparison["metric_comparisons"]:
+            before, after = pair["before"], pair["after"]
+            lines.append(
+                f"| {_value(before['service'])} | {_value(before['query_name'])} | "
+                f"{_comparison_observation(before)} | {_comparison_observation(after)} |"
+            )
     return "\n".join(lines) + "\n"
 
 
@@ -397,7 +419,9 @@ def render_markdown(report: StoredReport) -> str:
         for check in skipped_checks:
             condition = _PLAN_CONDITIONS.get(check["when"], check["when"])
             source = f" {_value(check.get('source', ''))} |" if has_sources else ""
-            lines.append(f"| {_value(check['tool'])} | {_value(condition)} |{source}")
+            tool = check["tool"]
+            label = f"{tool} ({check['query_name']})" if "query_name" in check else tool
+            lines.append(f"| {_value(label)} | {_value(condition)} |{source}")
 
     if calls:
         has_sources = any("source" in call for call in calls)

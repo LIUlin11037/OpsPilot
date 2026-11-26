@@ -1,8 +1,10 @@
 """Select read-only health checks from endpoint observations."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from functools import partial
 from operator import add
+from time import monotonic
 from typing import Annotated, Literal, Protocol, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -13,6 +15,7 @@ from opspilot.core.diagnosis import (
     Evidence,
     HealthEvidence,
     HealthTool,
+    MetricEvidence,
     ServiceLogEvidence,
     ServiceLogRead,
     SkippedCheck,
@@ -22,6 +25,7 @@ from opspilot.core.diagnosis import (
     suggest_next_checks,
     tool_call_from_evidence,
 )
+from opspilot.core.metrics import MetricRead
 
 
 class _HealthState(TypedDict, total=False):
@@ -29,12 +33,20 @@ class _HealthState(TypedDict, total=False):
     service: HealthEvidence
     dependencies: list[HealthEvidence]
     service_log: ServiceLogEvidence
+    metrics: list[MetricEvidence]
     tool_calls: Annotated[list[ToolCall], add]
     report: DiagnosisReport
 
 
 class ServiceLogTool(Protocol):
     def inspect_recent_errors(self, reference_time: str) -> ServiceLogRead: ...
+
+
+@dataclass(frozen=True)
+class MetricCheck:
+    endpoint: str
+    name: str
+    read: Callable[[str, float], MetricRead]
 
 
 def _inspect(
@@ -68,6 +80,28 @@ def _check_service_log(tool: ServiceLogTool, state: _HealthState) -> _HealthStat
     return {"service_log": evidence, "tool_calls": [tool_call_from_evidence(evidence, duration_ms)]}
 
 
+def _check_metrics(
+    state: _HealthState, *, tools: tuple[MetricCheck, ...], force: bool, budget_seconds: float,
+) -> _HealthState:
+    service = state["service"]
+    if not force and service["health"] == "healthy":
+        return {}
+    deadline = monotonic() + budget_seconds
+    trigger = "explicit_recheck" if force else f"service_{service['health']}"
+    evidence: list[MetricEvidence] = []
+    calls: list[ToolCall] = []
+    for tool in tools:
+        read, duration = measure_tool_call(
+            partial(tool.read, service["observed_at"], max(0.0, deadline - monotonic())),
+        )
+        metric: MetricEvidence = {**read, "tool": "inspect_service_metrics", "trigger": trigger}
+        if "peak_value" in metric:
+            metric["threshold_exceeded"] = metric["peak_value"] > metric["threshold"]
+        evidence.append(metric)
+        calls.append(tool_call_from_evidence(metric, duration))
+    return {"metrics": evidence, "tool_calls": calls}
+
+
 def _after_service(
     state: _HealthState, *, has_log: bool, check_service_log: bool,
     has_dependencies: bool, check_dependencies: bool,
@@ -89,6 +123,7 @@ def _after_log(
 
 def _write_report(
     state: _HealthState, *, conditional_log: bool, conditional_dependencies: tuple[HealthTool, ...],
+    conditional_metrics: tuple[MetricCheck, ...],
 ) -> _HealthState:
     service = state["service"]
     dependencies = state.get("dependencies", [])
@@ -111,7 +146,20 @@ def _write_report(
         dependency["health"] == "healthy" for dependency in dependencies
     )
     logs_clear = service_log is None or service_log.get("error_count") == 0
-    healthy = endpoints_healthy and logs_clear
+    metrics = state.get("metrics", [])
+    evidence.extend(metrics)
+    for metric in metrics:
+        name = f"{metric['query_name']} for {metric['service']}"
+        if metric["outcome"] == "observed":
+            relation = "above" if metric["threshold_exceeded"] else "within"
+            summary.append(
+                f"Metric {name} peaked at {metric['peak_value']:g} {metric['unit']}, "
+                f"{relation} its configured threshold in the review window."
+            )
+        else:
+            summary.append(f"Metric {name} was unavailable.")
+    metrics_clear = all(metric.get("threshold_exceeded") is False for metric in metrics)
+    healthy = endpoints_healthy and logs_clear and metrics_clear
     if not healthy:
         summary.append("The cause is undetermined.")
     report: DiagnosisReport = {
@@ -133,6 +181,11 @@ def _write_report(
         )
         for dependency in conditional_dependencies:
             skipped.append({"tool": "inspect_dependency_health", "when": condition, "source": dependency.endpoint})
+    if "metrics" not in state:
+        skipped.extend({
+            "tool": "inspect_service_metrics", "when": "service_unhealthy_or_unknown",
+            "source": metric.endpoint, "query_name": metric.name,
+        } for metric in conditional_metrics)
     if skipped:
         report["skipped_checks"] = skipped
     return {"report": report}
@@ -145,6 +198,9 @@ def run_health_diagnosis(
     check_dependencies: bool = False,
     service_log: ServiceLogTool | None = None,
     check_service_log: bool = False,
+    metric_checks: tuple[MetricCheck, ...] = (),
+    check_metrics: bool = False,
+    metric_budget_seconds: float = 5.0,
 ) -> DiagnosisReport:
     if check_service_log and service_log is None:
         raise ValueError("An explicit service log check requires a configured log source.")
@@ -160,13 +216,21 @@ def run_health_diagnosis(
     graph.add_node("report", partial(
         _write_report, conditional_log=service_log is not None and not check_service_log,
         conditional_dependencies=() if check_dependencies else dependency_tools,
+        conditional_metrics=() if check_metrics else metric_checks,
     ))
     graph.add_edge(START, "check_service")
     graph.add_edge("report", END)
-    routes = {"report": "report"}
+    after_checks = "report"
+    if metric_checks:
+        graph.add_node("check_metrics", partial(
+            _check_metrics, tools=metric_checks, force=check_metrics, budget_seconds=metric_budget_seconds,
+        ))
+        graph.add_edge("check_metrics", "report")
+        after_checks = "check_metrics"
+    routes = {"report": after_checks}
     if dependency_tools:
         graph.add_node("check_dependencies", partial(_check_dependencies, dependency_tools))
-        graph.add_edge("check_dependencies", "report")
+        graph.add_edge("check_dependencies", after_checks)
         routes["check_dependencies"] = "check_dependencies"
     if service_log is not None:
         graph.add_node("check_service_log", partial(_check_service_log, service_log))

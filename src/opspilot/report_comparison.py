@@ -8,6 +8,7 @@ from opspilot.core.diagnosis import (
     CheckCondition,
     DiagnosisStatus,
     Evidence,
+    MetricEvidence,
     ObservationOutcome,
     ProcessingResult,
     SkippedCheck,
@@ -146,9 +147,26 @@ class HealthComparisonFields(TypedDict):
     changes: list[EndpointChange]
 
 
+class MetricComparison(TypedDict):
+    before: MetricEvidence
+    after: MetricEvidence
+
+
 class HealthComparison(HealthComparisonFields, total=False):
     unchanged_endpoint_issues: list[EndpointIssue]
     service_log_changes: list[ServiceLogChange]
+    metric_comparisons: list[MetricComparison]
+
+
+def _metric_comparisons(before: StoredReport, after: StoredReport) -> list[MetricComparison]:
+    def observations(report: StoredReport) -> dict[tuple[str, str, str, str, str, int], MetricEvidence]:
+        return {
+            (item["source"], item["service"], item["query_name"], item["expression"], item["unit"], item["step_seconds"]): item
+            for item in report["evidence"] if item["tool"] == "inspect_service_metrics"
+        }
+
+    baseline, follow_up = observations(before), observations(after)
+    return [{"before": baseline[key], "after": follow_up[key]} for key in sorted(baseline.keys() & follow_up.keys())]
 
 
 def _scope(trace: TargetTraceSummary) -> TraceScope:
@@ -489,4 +507,7 @@ def compare_health_reports(
         comparison["unchanged_endpoint_issues"] = issues
     if include_service_log:
         comparison["service_log_changes"] = _service_log_changes(before["evidence"], after["evidence"])
+    metrics = _metric_comparisons(before, after)
+    if metrics:
+        comparison["metric_comparisons"] = metrics
     return comparison

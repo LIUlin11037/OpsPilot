@@ -9,6 +9,8 @@ from typing import Annotated, Literal, Protocol, TypedDict, TypeVar
 
 from langgraph.graph import END, START, StateGraph
 
+from opspilot.core.metrics import MetricRead
+
 UnavailableOutcome = Literal["timeout", "missing"]
 ObservationOutcome = Literal["observed", UnavailableOutcome]
 ToolName = Literal[
@@ -106,6 +108,15 @@ class ServiceLogEvidence(ServiceLogRead):
     tool: Literal["inspect_service_log"]
 
 
+class _MetricEvidenceFields(MetricRead):
+    tool: Literal["inspect_service_metrics"]
+    trigger: str
+
+
+class MetricEvidence(_MetricEvidenceFields, total=False):
+    threshold_exceeded: bool
+
+
 class TraceEvidenceFields(Observation):
     tool: Literal["inspect_target_trace"]
     checkpoint: str
@@ -137,7 +148,7 @@ ProcessingRead = ProcessingEvidence | EmptyProcessingEvidence | UnavailableEvide
 
 Evidence = (
     QueueEvidence | ConsumerEvidence | ProcessingRead |
-    TraceEvidence | HealthEvidence | ServiceLogEvidence
+    TraceEvidence | HealthEvidence | ServiceLogEvidence | MetricEvidence
 )
 
 
@@ -187,6 +198,7 @@ class _SkippedCheckFields(TypedDict):
 
 class SkippedCheck(_SkippedCheckFields, total=False):
     source: str
+    query_name: str
 
 
 class QueueTool(Protocol):
