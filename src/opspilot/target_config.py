@@ -5,6 +5,7 @@ from pathlib import Path
 
 from opspilot.config_file import parse_timeout_seconds, read_config_object
 from opspilot.health_config import HealthConfig, parse_health_config
+from opspilot.prometheus_config import PrometheusConfig, parse_prometheus_config
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ class TargetConfig:
     hirehub_snapshot: Path | None = None
     voting_snapshot: Path | None = None
     order: OrderTargetConfig | None = None
+    prometheus: PrometheusConfig | None = None
 
 
 def _rabbitmq_string(data: dict[str, object], field: str, default: str = "") -> str:
@@ -106,7 +108,7 @@ def _parse_order(data: object, config_dir: Path) -> OrderTargetConfig:
 
 def load_target_config(path: Path) -> TargetConfig:
     data = read_config_object(path, "Target")
-    unsupported = data.keys() - {"health", "rabbitmq", "hirehub", "voting", "order"}
+    unsupported = data.keys() - {"health", "rabbitmq", "hirehub", "voting", "order", "prometheus"}
     if unsupported:
         names = ", ".join(repr(name) for name in sorted(unsupported))
         raise ValueError(f"Target configuration contains unsupported fields: {names}.")
@@ -116,6 +118,8 @@ def load_target_config(path: Path) -> TargetConfig:
     rabbitmq = data.get("rabbitmq")
     if "health" in data and not isinstance(health, dict):
         raise ValueError("health must be a JSON object.")
+    if "prometheus" in data and health is None:
+        raise ValueError("prometheus requires a health section.")
     if "rabbitmq" in data and not isinstance(rabbitmq, dict):
         raise ValueError("rabbitmq must be a JSON object.")
     config_dir = path.absolute().parent
@@ -125,4 +129,5 @@ def load_target_config(path: Path) -> TargetConfig:
         hirehub_snapshot=_parse_snapshot(data["hirehub"], config_dir, "HireHub") if "hirehub" in data else None,
         voting_snapshot=_parse_snapshot(data["voting"], config_dir, "Voting") if "voting" in data else None,
         order=_parse_order(data["order"], config_dir) if "order" in data else None,
+        prometheus=parse_prometheus_config(data["prometheus"]) if "prometheus" in data else None,
     )

@@ -14,7 +14,7 @@ ObservationOutcome = Literal["observed", UnavailableOutcome]
 ToolName = Literal[
     "inspect_queue", "inspect_consumer", "inspect_processing", "inspect_target_trace",
     "inspect_service_health", "inspect_dependency_health", "inspect_consumer_endpoint",
-    "inspect_service_log",
+    "inspect_service_log", "inspect_service_metrics",
 ]
 ProcessingResult = Literal["succeeded", "failed"]
 ProcessingCorrelation = Literal["matched", "not_in_sample", "unknown"]
@@ -164,8 +164,20 @@ class _PlannedCheckFields(TypedDict):
     count: int
 
 
+class PlannedMetricQuery(TypedDict):
+    name: str
+    metric: str
+    unit: str
+    threshold: float
+
+
 class PlannedCheck(_PlannedCheckFields, total=False):
     sources: list[str]
+    service: str
+    queries: list[PlannedMetricQuery]
+    window_seconds: int
+    step_seconds: int
+    timeout_seconds: int
 
 
 class _SkippedCheckFields(TypedDict):
@@ -253,7 +265,7 @@ class NextCheck(TypedDict):
 
 
 DiagnosisWorkflow = Literal["http_health", "queue", "target_trace", "investigation"]
-RequestedCheck = Literal["check_consumer_health", "check_dependencies", "check_service_log"]
+RequestedCheck = Literal["check_consumer_health", "check_dependencies", "check_service_log", "check_metrics"]
 
 
 class DiagnosisRouteFields(TypedDict):

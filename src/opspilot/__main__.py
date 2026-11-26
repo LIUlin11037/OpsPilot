@@ -488,7 +488,9 @@ def _prepare_auto_diagnosis(
         raise ValueError("--vhost and --timeout require --management-url")
 
     requested_check: RequestedCheck | None = None
-    if args.check_service_log:
+    if args.check_metrics:
+        requested_check = "check_metrics"
+    elif args.check_service_log:
         requested_check = "check_service_log"
     elif args.check_dependencies:
         requested_check = "check_dependencies"
@@ -643,6 +645,24 @@ def _prepare_auto_diagnosis(
             elif args.check_service_log:
                 dependency_check["when"] = "service_unhealthy_or_unknown_or_log_errors"
             checks.append(dependency_check)
+        metrics = target.prometheus if target is not None else None
+        if args.check_metrics and metrics is None:
+            raise ValueError("--check-metrics requires a prometheus section in --config")
+        if metrics is not None:
+            if not args.plan:
+                raise ValueError("Prometheus metrics are currently available in plan previews only.")
+            checks.append({
+                "tool": "inspect_service_metrics",
+                "when": "always" if args.check_metrics else "service_unhealthy_or_unknown",
+                "count": len(metrics.queries), "sources": [metrics.endpoint],
+                "service": metrics.service,
+                "queries": [
+                    {"name": query.name, "metric": query.metric, "unit": query.unit, "threshold": query.threshold}
+                    for query in metrics.queries
+                ],
+                "window_seconds": metrics.window_seconds, "step_seconds": metrics.step_seconds,
+                "timeout_seconds": metrics.timeout_seconds,
+            })
         plan = {"question": question, "routing": routing, "scope": {"service_url": service.endpoint}, "checks": checks}
         return plan, partial(
             _run_configured_health, question, config,
@@ -784,6 +804,7 @@ def main() -> None:
     auto_diagnose.add_argument("--health-config", type=Path, help="JSON file with health endpoints.")
     auto_diagnose.add_argument("--management-url", help="RabbitMQ Management API base URL.")
     auto_diagnose.add_argument("--plan", action="store_true", help="Show the selected workflow and its configured checks.")
+    auto_diagnose.add_argument("--check-metrics", action="store_true", help="Check configured service metrics explicitly.")
     auto_diagnose.add_argument(
         "--workflow", choices=("http_health", "queue", "investigation"), help="Select a workflow explicitly.",
     )

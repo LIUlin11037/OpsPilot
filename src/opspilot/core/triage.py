@@ -23,6 +23,7 @@ _CHECK_WORKFLOWS: dict[RequestedCheck, DiagnosisWorkflow] = {
     "check_consumer_health": "queue",
     "check_dependencies": "http_health",
     "check_service_log": "http_health",
+    "check_metrics": "http_health",
 }
 
 
