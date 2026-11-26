@@ -1,0 +1,23 @@
+{
+  "health": {
+    "service_url": "http://127.0.0.1:18761/ready"
+  },
+  "prometheus": {
+    "base_url": "http://127.0.0.1:18762",
+    "service": "orders",
+    "window_seconds": 30,
+    "step_seconds": 5,
+    "queries": {
+      "error_rate": {
+        "metric": "http_requests_total",
+        "unit": "ratio",
+        "threshold": 0.1
+      },
+      "latency_p95": {
+        "metric": "http_request_duration_seconds_bucket",
+        "unit": "seconds",
+        "threshold": 0.2
+      }
+    }
+  }
+}

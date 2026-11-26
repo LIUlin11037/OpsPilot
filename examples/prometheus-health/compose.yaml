@@ -1,0 +1,15 @@
+services:
+  service:
+    image: python:3.12-slim
+    command: ["python", "/fixture/service.py"]
+    volumes:
+      - ./service.py:/fixture/service.py:ro
+    ports:
+      - "127.0.0.1:18761:8080"
+  prometheus:
+    image: prom/prometheus:v3.13.5
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:18762:9090"
