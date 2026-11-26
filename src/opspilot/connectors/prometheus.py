@@ -9,6 +9,7 @@ from math import isfinite
 from time import monotonic
 from urllib.parse import quote, urlencode, urlsplit
 
+from opspilot.core.incident_window import IncidentWindow, METRIC_RATE_SECONDS
 from opspilot.core.metrics import MetricRead
 from opspilot.prometheus_config import MetricQuery, PrometheusConfig
 
@@ -20,12 +21,13 @@ _ACCESS_REASONS = {401: "authentication_failed", 403: "access_denied"}
 
 def _expression(service: str, query: MetricQuery) -> str:
     scope = f'job="{service}"'
+    period = f"{METRIC_RATE_SECONDS // 60}m"
     if query.name == "error_rate":
-        total = f"sum(rate({query.metric}{{{scope}}}[1m]))"
-        errors = f'sum(rate({query.metric}{{{scope},status=~"5.."}}[1m]))'
+        total = f"sum(rate({query.metric}{{{scope}}}[{period}]))"
+        errors = f'sum(rate({query.metric}{{{scope},status=~"5.."}}[{period}]))'
         return f"(({errors} or (0 * {total})) / {total}) and on() ({total} > 0)"
-    buckets = f"sum by (le) (rate({query.metric}{{{scope}}}[1m]))"
-    count = f'sum(rate({query.metric}{{{scope},le="+Inf"}}[1m]))'
+    buckets = f"sum by (le) (rate({query.metric}{{{scope}}}[{period}]))"
+    count = f'sum(rate({query.metric}{{{scope},le="+Inf"}}[{period}]))'
     return f"histogram_quantile(0.95, {buckets}) and on() ({count} > 0)"
 
 
@@ -90,33 +92,45 @@ class PrometheusConnector:
                     raise _QueryFailure(reason, response.status)
                 return payload
 
-    def inspect(self, query: MetricQuery, reference_time: str, timeout: float | None = None) -> MetricRead:
+    def inspect(
+        self, query: MetricQuery, reference_time: str, timeout: float | None = None,
+        *, window: IncidentWindow | None = None,
+    ) -> MetricRead:
         config = self.config
-        end = int(datetime.fromisoformat(reference_time).timestamp())
-        start = end - config.window_seconds
+        if window is None:
+            end = int(datetime.fromisoformat(reference_time).timestamp())
+            start = window_start = end - config.window_seconds
+            step = config.step_seconds
+        else:
+            end = int(window.end.timestamp())
+            start = int(window.evaluation_start.timestamp())
+            window_start = int(window.start.timestamp())
+            step = window.metric_step(config.step_seconds)
         expression = _expression(config.service, query)
         timeout = min(config.timeout_seconds, timeout) if timeout is not None else config.timeout_seconds
         result: MetricRead = {
             "source": config.endpoint, "observed_at": reference_time, "service": config.service,
             "query_name": query.name, "expression": expression, "unit": query.unit, "threshold": query.threshold,
-            "window_start": _timestamp(start), "window_end": _timestamp(end), "step_seconds": config.step_seconds,
+            "window_start": _timestamp(window_start), "window_end": _timestamp(end), "step_seconds": step,
             "outcome": "missing",
         }
+        if window is not None:
+            result["evaluation_start"] = _timestamp(start)
         params = {
-            "query": expression, "start": start, "end": end, "step": config.step_seconds,
+            "query": expression, "start": start, "end": end, "step": step,
             "timeout": f"{max(1, int(timeout * 1000))}ms", "limit": _SERIES_LIMIT,
         }
         try:
             if timeout <= 0:
                 raise _QueryFailure("time_budget_exhausted")
             payload = self._query_range(params, timeout)
-            samples = _samples(payload, start, end, config.step_seconds, query.unit)
+            samples = _samples(payload, start, end, step, query.unit)
             result["sample_count"] = len(samples)
             if not samples:
                 raise _QueryFailure("no_data")
             latest_time, latest_value = samples[-1]
             result["latest_sample_at"] = _timestamp(latest_time)
-            if latest_time < end - 2 * config.step_seconds:
+            if latest_time < end - 2 * step:
                 raise _QueryFailure("stale_samples")
             result.update(outcome="observed", latest_value=latest_value, peak_value=max(value for _, value in samples))
         except TimeoutError:

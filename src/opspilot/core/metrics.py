@@ -18,6 +18,7 @@ class _MetricReadFields(TypedDict):
 
 
 class MetricRead(_MetricReadFields, total=False):
+    evaluation_start: str
     sample_count: int
     latest_sample_at: str
     latest_value: float
