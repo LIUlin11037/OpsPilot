@@ -5,6 +5,7 @@ from pathlib import Path
 
 from opspilot.config_file import parse_timeout_seconds, read_config_object
 from opspilot.health_config import HealthConfig, parse_health_config
+from opspilot.jaeger_config import JaegerConfig, parse_jaeger_config
 from opspilot.prometheus_config import PrometheusConfig, parse_prometheus_config
 
 
@@ -35,6 +36,7 @@ class TargetConfig:
     voting_snapshot: Path | None = None
     order: OrderTargetConfig | None = None
     prometheus: PrometheusConfig | None = None
+    jaeger: JaegerConfig | None = None
 
 
 def _rabbitmq_string(data: dict[str, object], field: str, default: str = "") -> str:
@@ -108,12 +110,12 @@ def _parse_order(data: object, config_dir: Path) -> OrderTargetConfig:
 
 def load_target_config(path: Path) -> TargetConfig:
     data = read_config_object(path, "Target")
-    unsupported = data.keys() - {"health", "rabbitmq", "hirehub", "voting", "order", "prometheus"}
+    unsupported = data.keys() - {"health", "rabbitmq", "hirehub", "voting", "order", "prometheus", "jaeger"}
     if unsupported:
         names = ", ".join(repr(name) for name in sorted(unsupported))
         raise ValueError(f"Target configuration contains unsupported fields: {names}.")
     if not data:
-        raise ValueError("Target configuration requires a health, rabbitmq, hirehub, voting, or order section.")
+        raise ValueError("Target configuration requires a health, rabbitmq, hirehub, voting, order, or jaeger section.")
     health = data.get("health")
     rabbitmq = data.get("rabbitmq")
     if "health" in data and not isinstance(health, dict):
@@ -130,4 +132,5 @@ def load_target_config(path: Path) -> TargetConfig:
         voting_snapshot=_parse_snapshot(data["voting"], config_dir, "Voting") if "voting" in data else None,
         order=_parse_order(data["order"], config_dir) if "order" in data else None,
         prometheus=parse_prometheus_config(data["prometheus"]) if "prometheus" in data else None,
+        jaeger=parse_jaeger_config(data["jaeger"]) if "jaeger" in data else None,
     )

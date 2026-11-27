@@ -742,7 +742,7 @@ def test_auto_voting_trace_requires_voting_snapshot_configuration() -> None:
 @pytest.mark.parametrize(
     ("data", "error"),
     [
-        ({}, "requires a health, rabbitmq, hirehub, voting, or order section"),
+    ({}, "requires a health, rabbitmq, hirehub, voting, order, or jaeger section"),
         ({"health": None}, "health must be a JSON object"),
         ({"hirehub": {"snapshot": ""}}, "hirehub.snapshot must be a nonempty path"),
         ({"hirehub": {"snapshot": "snapshot.json", "management_url": "http://localhost"}},
