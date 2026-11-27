@@ -52,6 +52,7 @@ from opspilot.core.model_routing import REQUEST_FIELDS, AdvisableWorkflow
 from opspilot.core.startup import run_startup
 from opspilot.core.target_trace import run_target_trace
 from opspilot.core.triage import select_diagnosis_route
+from opspilot.handoff import export_reports, import_reports
 from opspilot.health_config import DEFAULT_HEALTH_TIMEOUT_SECONDS, HealthConfig, load_health_config
 from opspilot.investigation_store import (
     InvestigationBusyError, InvestigationRequest, TaskJournal, create_task, load_task, lock_task,
@@ -938,6 +939,11 @@ def main() -> None:
     report_command = commands.add_parser("report", help="Show a saved report.")
     report_command.add_argument("task_id", help="Task ID returned by diagnose.")
     report_command.add_argument("--format", choices=("json", "markdown"), default="json")
+    export_command = commands.add_parser("export-reports", help="Write selected saved reports to a local ZIP.")
+    export_command.add_argument("--output", required=True, type=Path, help="Path for a new report ZIP.")
+    export_command.add_argument("task_ids", nargs="+", help="Task IDs to include.")
+    import_command = commands.add_parser("import-reports", help="Import a local report ZIP into SQLite.")
+    import_command.add_argument("package", type=Path, help="Path to a report ZIP.")
     for name, help_text in (
         ("task", "Show a saved investigation and its attempts."),
         ("resume", "Continue an unfinished investigation."),
@@ -1056,6 +1062,18 @@ def main() -> None:
         print(json.dumps(evidence, indent=2))
         if evidence["outcome"] != "observed":
             parser.exit(1)
+        return
+
+    if args.command in ("export-reports", "import-reports"):
+        try:
+            with _report_storage_errors(parser):
+                if args.command == "export-reports":
+                    task_ids = export_reports(args.db, args.output, args.task_ids)
+                else:
+                    task_ids = import_reports(args.package, args.db)
+        except ValueError as error:
+            parser.exit(1, f"opspilot: {error}\n")
+        print(json.dumps({"count": len(task_ids), "task_ids": task_ids}, indent=2))
         return
 
     if args.command in ("task", "resume", "recheck"):

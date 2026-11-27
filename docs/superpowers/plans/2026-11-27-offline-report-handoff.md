@@ -37,10 +37,10 @@
 - `load_reports_for_export(database: Path, task_ids: Sequence[str]) -> list[StoredReport]`
 - `export_reports(database: Path, destination: Path, task_ids: Sequence[str]) -> list[str]`
 
-- [ ] Add tests for selecting two of three reports in reversed argument order. Assert the manifest follows database order and includes matching JSON, Markdown and checksums.
-- [ ] Run `python -m pytest tests/test_handoff_export.py -q` and verify the absent-interface failure.
-- [ ] Implement a read-only selection and exclusive ZIP publication. Use `manifest.json`, format version `1`, and indexed entries `reports/1.json` and `reports/1.md`. Cap each package at 100 reports and 32 MiB uncompressed. Reject duplicate IDs, missing IDs and existing output files before publishing.
-- [ ] Check source immutability, no output on failure, and the exact file set. Run startup and the full test suite, then commit the writer.
+- [x] Add tests for selecting two of three reports in reversed argument order. Assert the manifest follows database order and includes matching JSON, Markdown and checksums.
+- [x] Run `python -m pytest tests/test_handoff_export.py -q` and verify the absent-interface failure.
+- [x] Implement a read-only selection and exclusive ZIP publication. Use `manifest.json`, format version `1`, and indexed entries `reports/1.json` and `reports/1.md`. Cap each package at 100 reports and 32 MiB uncompressed. Reject duplicate IDs, missing IDs and existing output files before publishing.
+- [x] Check source immutability, no output on failure, and the exact file set. Run startup and the full test suite, then commit the writer.
 
 ### Task 2. Validate the ZIP and import atomically
 
@@ -54,10 +54,10 @@
 - `import_reports(package: Path, database: Path) -> list[str]`
 - `store_imported_reports(database: Path, reports: Sequence[StoredReport]) -> None`
 
-- [ ] Add tests for corruption, unknown version, duplicate entries, extra files, oversized content, duplicate report IDs and an existing database conflict. Assert rejected packages leave destination reports untouched.
-- [ ] Run `python -m pytest tests/test_handoff_import.py -q` and verify the absent-interface failure.
-- [ ] Check member names and declared uncompressed size before reading. Bound the reads, verify digests, decode UTF-8 and validate the report fields used by the renderer. Use JSON as the imported report. Publish a new database after closing its transaction. Use a single transaction for an existing database.
-- [ ] Expand the round-trip case to assert original report content and order. Run startup and the full test suite, then commit the importer.
+- [x] Add tests for corruption, unknown version, duplicate entries, extra files, oversized content, duplicate report IDs and an existing database conflict. Assert rejected packages leave destination reports untouched.
+- [x] Run `python -m pytest tests/test_handoff_import.py -q` and verify the absent-interface failure.
+- [x] Check member names and declared uncompressed size before reading. Bound the reads, verify digests, decode UTF-8 and validate the report fields used by the renderer. Use JSON as the imported report. Publish a new database after closing its transaction. Use a single transaction for an existing database.
+- [x] Expand the round-trip case to assert original report content and order. Run startup and the full test suite, then commit the importer.
 
 ### Task 3. Connect the CLI and verify a real offline handoff
 
@@ -66,8 +66,8 @@
 - Modify `src/opspilot/__main__.py` and `README.md`.
 - Create `tests/test_handoff_cli.py` and `docs/v1.4-offline-handoff.md`.
 
-- [ ] Add a CLI test exporting and importing into a new SQLite database. Assert `report`, `reports` and `compare-http` match source results by original ID.
-- [ ] Run `python -m pytest tests/test_handoff_cli.py -q` and verify the unknown-command failure.
-- [ ] Add `export-reports --output ZIP TASK_ID [...]` and `import-reports ZIP`, both using global `--db`. Return JSON with the count and original IDs and report errors through the CLI.
-- [ ] Run the real Traefik archive handoff in an isolated directory using the fault, recovery and history IDs from `docs/v1.3-acceptance.md`. Check report equality, two matched metrics, HTTP 504 to 200, historical indexes `[1, 2, 3]`, and an unchanged source database digest.
-- [ ] Record the commands and results. Run startup and the full test suite and commit the CLI and verification record.
+- [x] Add a CLI test exporting and importing into a new SQLite database. Assert `report`, `reports` and `compare-http` match source results by original ID.
+- [x] Run `python -m pytest tests/test_handoff_cli.py -q` and verify the unknown-command failure.
+- [x] Add `export-reports --output ZIP TASK_ID [...]` and `import-reports ZIP`, both using global `--db`. Return JSON with the count and original IDs and report errors through the CLI.
+- [x] Run the real Traefik archive handoff in an isolated directory using the fault, recovery and history IDs from `docs/v1.3-acceptance.md`. Check report equality, two matched metrics, HTTP 504 to 200, historical indexes `[1, 2, 3]`, and an unchanged source database digest.
+- [x] Record the commands and results. Run startup and the full test suite and commit the CLI and verification record.
