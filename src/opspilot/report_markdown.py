@@ -28,6 +28,7 @@ _ROUTE_BASES = {
     "check_service_log": "--check-service-log",
     "check_metrics": "--check-metrics",
     "incident_window": "Requested incident window",
+    "trace_id": "Requested Trace ID",
 }
 _SCOPE_LABELS = {
     "service_url": "Service URL",
@@ -43,6 +44,8 @@ _SCOPE_LABELS = {
     "entity_id": "Entity ID",
     "environment": "Environment",
     "snapshot_source": "Snapshot source",
+    "trace_id": "Trace ID",
+    "trace_source": "Trace source",
 }
 _PLAN_CONDITIONS = {
     "always": "Always",
@@ -90,6 +93,13 @@ _EVIDENCE_FIELDS = {
     "latest_value": "Latest value",
     "peak_value": "Peak value",
     "status": "State",
+    "span_id": "Span ID",
+    "parent_span_id": "Parent span ID",
+    "operation": "Operation",
+    "kind": "Span kind",
+    "start_time_unix_nano": "Start (Unix ns)",
+    "end_time_unix_nano": "End (Unix ns)",
+    "span_count": "Matching spans",
     "pending_messages": "Pending messages",
     "unacknowledged_messages": "Unacknowledged messages",
     "registered_consumers": "Registered consumers",
@@ -359,6 +369,19 @@ def render_markdown(report: StoredReport) -> str:
             for branch, status in trace["branches"].items()
         )
 
+    request_trace = report.get("request_trace")
+    if request_trace is not None:
+        lines.extend([
+            "", "## Request trace", "",
+            f"- **Trace ID** {_value(request_trace['trace_id'])}",
+            f"- **Coverage** {_value(request_trace['coverage'])}",
+            f"- **Span evidence indexes** {_value(request_trace['span_evidence_indexes'])}",
+            f"- **Errors without a linked downstream error** {_value(request_trace['leaf_error_evidence_indexes'])}",
+            f"- **Upstream error evidence indexes** {_value(request_trace['upstream_error_evidence_indexes'])}",
+            f"- **Missing parent span IDs** {_value(request_trace['missing_parent_span_ids'])}",
+            f"- **Gaps** {_value(request_trace['gaps'])}",
+        ])
+
     incident = report.get("incident")
     if incident is not None:
         lines.extend([
@@ -414,15 +437,16 @@ def render_markdown(report: StoredReport) -> str:
 
     lines.extend(["", "## Evidence", ""])
     if report["evidence"]:
-        index_header = "Index | " if incident is not None else ""
-        index_separator = "---: | " if incident is not None else ""
+        show_indexes = incident is not None or request_trace is not None
+        index_header = "Index | " if show_indexes else ""
+        index_separator = "---: | " if show_indexes else ""
         lines.extend([
             f"| {index_header}Check | Outcome | Details | Origin | Source | Observed at |",
             f"| {index_separator}--- | --- | --- | --- | --- | --- |",
         ])
         for index, item in enumerate(report["evidence"]):
             check = item.get("checkpoint", item["tool"])
-            index_column = f"{index} | " if incident is not None else ""
+            index_column = f"{index} | " if show_indexes else ""
             lines.append(
                 f"| {index_column}{_value(check)} | {_value(item['outcome'])} | {_evidence_details(item)} | "
                 f"{_value(item.get('origin', ''))} | {_value(item['source'])} | "

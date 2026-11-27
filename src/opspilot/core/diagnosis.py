@@ -190,8 +190,11 @@ class PlannedCheck(_PlannedCheckFields, total=False):
     queries: list[PlannedMetricQuery]
     window_seconds: int
     step_seconds: int
-    timeout_seconds: int
+    timeout_seconds: float
     evaluation_start: str
+    method: Literal["GET"]
+    max_response_bytes: int
+    max_spans: int
 
 
 class _SkippedCheckFields(TypedDict):
@@ -279,7 +282,7 @@ class NextCheck(TypedDict):
     description: str
 
 
-DiagnosisWorkflow = Literal["http_health", "queue", "target_trace", "investigation"]
+DiagnosisWorkflow = Literal["http_health", "queue", "target_trace", "investigation", "request_trace"]
 RequestedCheck = Literal["check_consumer_health", "check_dependencies", "check_service_log", "check_metrics"]
 
 
@@ -298,7 +301,7 @@ class ModelRoutingEvidence(TypedDict):
 
 class DiagnosisRoute(DiagnosisRouteFields, total=False):
     selected_by: Literal[
-        "message_id", "delivery_id", "voter_id", "entity_id", "workflow", "qualified_model", "incident_window"
+        "message_id", "delivery_id", "voter_id", "entity_id", "workflow", "qualified_model", "incident_window", "trace_id"
     ] | RequestedCheck
     model: ModelRoutingEvidence
 

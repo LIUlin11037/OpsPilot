@@ -21,6 +21,7 @@ from opspilot.adapters.order_trace import OrderTraceAdapter
 from opspilot.adapters.simulated import SimulatedProcessingAdapter
 from opspilot.adapters.voting_snapshot import VotingSnapshotAdapter, parse_voter_id
 from opspilot.connectors.http_health import HttpHealthConnector
+from opspilot.connectors.jaeger import JaegerConnector
 from opspilot.connectors.jsonl_service_log import JsonlServiceLogConnector
 from opspilot.connectors.model_routing import model_from_environment
 from opspilot.connectors.mysql import MySQLConnector, MySQLHealthConnector, mysql_health_endpoint
@@ -49,14 +50,17 @@ from opspilot.core.incident_report import summarize_incident
 from opspilot.core.incident_window import IncidentWindow, parse_incident_window
 from opspilot.core.investigation import InvestigationTool, run_investigation, unavailable_read
 from opspilot.core.model_routing import REQUEST_FIELDS, AdvisableWorkflow
+from opspilot.core.request_trace import run_request_trace
 from opspilot.core.startup import run_startup
 from opspilot.core.target_trace import run_target_trace
+from opspilot.core.trace_evidence import normalize_trace_id
 from opspilot.core.triage import select_diagnosis_route
 from opspilot.handoff import export_reports, import_reports
 from opspilot.health_config import DEFAULT_HEALTH_TIMEOUT_SECONDS, HealthConfig, load_health_config
 from opspilot.investigation_store import (
     InvestigationBusyError, InvestigationRequest, TaskJournal, create_task, load_task, lock_task,
 )
+from opspilot.jaeger_config import MAX_RESPONSE_BYTES, MAX_SPANS
 from opspilot.prometheus_config import PrometheusConfig
 from opspilot.report_comparison import (
     compare_health_reports, compare_queue_reports, compare_trace_reports, compare_voting_reports,
@@ -535,12 +539,47 @@ def _prepare_incident_window(
     return plan, partial(_run_incident_window, question, service, health.service_log_path, metrics, window)
 
 
+def _prepare_request_trace(
+    args: argparse.Namespace, question: str,
+) -> tuple[DiagnosisPlan, Callable[[], DiagnosisReport]]:
+    if any(value is not None for value in (
+        args.workflow, args.incident_start, args.incident_end, args.health_config,
+        args.management_url, args.queue, args.vhost, args.timeout, args.max_steps, args.max_seconds, args.model_routing,
+    )) or any((args.check_dependencies, args.check_service_log, args.check_metrics, args.check_consumer_health)):
+        raise ValueError("--trace-id cannot be combined with other workflow, scope, or check options.")
+    trace_id = normalize_trace_id(args.trace_id)
+    if args.config is None:
+        raise ValueError("--trace-id requires --config with a jaeger section.")
+    config = load_target_config(args.config).jaeger
+    if config is None:
+        raise ValueError("--trace-id requires a jaeger section in --config.")
+    endpoint = JaegerConnector(config).endpoint(trace_id)
+    plan: DiagnosisPlan = {
+        "question": question,
+        "routing": {"workflow": "request_trace", "matched_terms": [], "selected_by": "trace_id"},
+        "scope": {"trace_id": trace_id, "trace_source": endpoint},
+        "checks": [{
+            "tool": "inspect_request_trace", "when": "always", "count": 1, "sources": [endpoint],
+            "method": "GET", "timeout_seconds": config.timeout_seconds,
+            "max_response_bytes": MAX_RESPONSE_BYTES, "max_spans": MAX_SPANS,
+        }],
+    }
+
+    def diagnose_trace() -> DiagnosisReport:
+        connector = JaegerConnector(config, os.getenv("OPSPILOT_JAEGER_TOKEN"))
+        return run_request_trace(question, trace_id, connector.inspect_trace)
+
+    return plan, diagnose_trace
+
+
 def _prepare_auto_diagnosis(
     args: argparse.Namespace, parser: argparse.ArgumentParser,
 ) -> tuple[DiagnosisPlan, Callable[[], DiagnosisReport]]:
     question = args.question.strip()
     if not question:
         raise ValueError("question must not be empty")
+    if args.trace_id is not None:
+        return _prepare_request_trace(args, question)
     if args.incident_start is not None or args.incident_end is not None:
         return _prepare_incident_window(args, question)
     if args.message_id is not None:
@@ -902,6 +941,7 @@ def main() -> None:
     auto_scope.add_argument("--delivery-id", type=int, help="Trace a delivery in the configured HireHub snapshot.")
     auto_scope.add_argument("--voter-id", help="Trace a voter in the configured voting snapshot.")
     auto_scope.add_argument("--order-id", help="Trace an exact order ID in the configured fulfillment databases.")
+    auto_scope.add_argument("--trace-id", help="Read an exact Trace ID from the configured Jaeger endpoint.")
     auto_diagnose.add_argument("question", help="Incident description.")
     for health_parser in (health, auto_diagnose):
         health_parser.add_argument(
