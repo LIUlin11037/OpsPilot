@@ -1,8 +1,13 @@
 import json
 import os
 from pathlib import Path
+import runpy
 import subprocess
 import sys
+from contextlib import contextmanager
+from urllib.parse import urlencode
+
+import pytest
 
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "diagnostic-regression"
@@ -79,3 +84,46 @@ def test_regression_reports_case_when_diagnosis_command_fails(tmp_path):
     assert case["id"] == "recovered-history"
     assert case["passed"] is False
     assert "--incident-start" in case["error"]
+
+
+@pytest.mark.parametrize("wrong_selector", ['{job="neighbor"}', '{status=~"5.."}', ""])
+def test_fixture_rejects_queries_with_any_wrongly_scoped_selector(wrong_selector):
+    runner = runpy.run_path(str(EXAMPLE / "run.py"))
+    connected = runner["FixtureServer"]({"metrics": {"error_rate": [[0, "0.5"]]}})
+    metric = "traefik_service_requests_total"
+    query = f'sum(rate({metric}{wrong_selector}[1m])) / sum(rate({metric}{{job="orders"}}[1m]))'
+    path = "/api/v1/query_range?" + urlencode({"query": query, "start": 5, "end": 35, "step": 5})
+
+    with connected, pytest.raises(ValueError, match="scope"):
+        connected.reply(path)
+
+
+@pytest.mark.parametrize("stage", ["creation", "cleanup"])
+def test_regression_reports_temp_failure_and_continues(stage, tmp_path, monkeypatch, capsys):
+    runner = runpy.run_path(str(EXAMPLE / "run.py"))
+    main = runner["main"]
+    original_directory = main.__globals__["TemporaryDirectory"]
+    healthy, *_ = json.loads((EXAMPLE / "cases.json").read_text(encoding="utf-8"))
+    cases = tmp_path / "two-cases.json"
+    cases.write_text(json.dumps([healthy, {**healthy, "id": "second-healthy"}]), encoding="utf-8")
+    attempts = 0
+
+    @contextmanager
+    def case_directory(*, prefix):
+        nonlocal attempts
+        attempts += 1
+        first = attempts == 1
+        if first and stage == "creation":
+            raise PermissionError("Fixture directory creation denied")
+        with original_directory(prefix=prefix, dir=tmp_path) as directory:
+            yield directory
+        if first and stage == "cleanup":
+            raise PermissionError("Fixture directory cleanup denied")
+
+    monkeypatch.setitem(main.__globals__, "TemporaryDirectory", case_directory)
+
+    assert main(["--cases", str(cases)]) == 1
+    first, second = json.loads(capsys.readouterr().out)["cases"]
+    assert first["id"] == "healthy" and first["passed"] is False
+    assert stage in first["error"]
+    assert second["id"] == "second-healthy" and second["passed"] is True

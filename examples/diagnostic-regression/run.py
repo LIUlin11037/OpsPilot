@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Iterator, Sequence
@@ -27,6 +28,8 @@ METRIC_CONFIG = {
     "error_rate": {"metric": "traefik_service_requests_total", "unit": "ratio", "threshold": 0.1},
     "latency_p95": {"metric": "traefik_service_request_duration_seconds_bucket", "unit": "seconds", "threshold": 0.2},
 }
+METRIC_SELECTORS = re.compile(r"([A-Za-z_:][A-Za-z0-9_:]*)\s*(?:\{([^{}]*)\}|(?=\[))")
+JOB_MATCHERS = re.compile(r'(?:^|,)\s*job\s*(=~|!=|!~|=)\s*"([^"]*)"\s*(?=,|$)')
 ABSENT = object()
 
 # Use the normal CLI entry in a child process. Reject any connection beyond this case's fixture.
@@ -67,8 +70,8 @@ class FixtureServer(ThreadingHTTPServer):
         end, = map(int, params["end"])
         start, = map(int, params["start"])
         step, = map(int, params["step"])
-        if f'job="{SERVICE}"' not in query or step != STEP_SECONDS:
-            raise ValueError(f"Unexpected metric scope or step in {request}")
+        if step != STEP_SECONDS:
+            raise ValueError(f"Unexpected metric step in {request}")
         if "window" in self.inputs:
             window_start, window_end = map(datetime.fromisoformat, self.inputs["window"])
             interval = (int(window_start.timestamp()) + 60, int(window_end.timestamp()))
@@ -77,10 +80,15 @@ class FixtureServer(ThreadingHTTPServer):
         if (start, end) != interval:
             raise ValueError(f"Unexpected metric window in {request}")
 
-        names = [name for name in self.inputs["metrics"] if f'{METRIC_CONFIG[name]["metric"]}{{' in query]
-        if len(names) != 1:
+        selectors = METRIC_SELECTORS.findall(query)
+        metrics = {METRIC_CONFIG[name]["metric"]: name for name in self.inputs["metrics"]}
+        metric_names = {metric for metric, _ in selectors}
+        if len(metric_names) != 1 or not metric_names <= metrics.keys():
             raise ValueError(f"Unexpected metric query in {request}")
-        samples = self.inputs["metrics"][names[0]]
+        if any(JOB_MATCHERS.findall(labels) != [("=", SERVICE)] for _, labels in selectors):
+            raise ValueError(f"Unexpected metric scope in {request}")
+        metric, = metric_names
+        samples = self.inputs["metrics"][metrics[metric]]
         if samples == "query_timeout":
             return 503, {"status": "error", "errorType": "timeout"}
         return 200, {
@@ -202,10 +210,11 @@ def field_value(report: object, path: str) -> object:
     return report
 
 
-def run_case(case: dict[str, Any], directory: Path) -> dict[str, Any]:
+def run_case(case: dict[str, Any]) -> dict[str, Any]:
     name = {"id": case["id"], "origin": case.get("origin")}
     try:
-        with fixture_server(case["inputs"]) as server:
+        with TemporaryDirectory(prefix="opspilot-regression-") as temporary, fixture_server(case["inputs"]) as server:
+            directory = Path(temporary)
             port = server.server_port
             args = build_diagnosis_args(case, f"http://{HOST}:{port}", directory)
             diagnosed = cli(directory, port, *args)
@@ -234,10 +243,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, ValueError) as error:
         parser.error(str(error))
 
-    results = []
-    for case in cases:
-        with TemporaryDirectory(prefix="opspilot-regression-") as directory:
-            results.append(run_case(case, Path(directory)))
+    results = [run_case(case) for case in cases]
     passed = all(result["passed"] for result in results)
     print(json.dumps({"passed": passed, "cases": results}, indent=2))
     return 0 if passed else 1
