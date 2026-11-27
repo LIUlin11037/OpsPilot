@@ -274,6 +274,10 @@ JSON 报告包含任务 ID、用户提交的问题、诊断状态和结论。每
 
 在已安装 OpsPilot 的环境里运行 `python examples/diagnostic-regression/run.py`，用固定观测重跑真实的诊断和报告入口。命令会指出哪个案例的结论、证据或范围偏离了预期。[回归用法与验收记录](docs/v1.5-diagnostic-regression.md)
 
+## 按 Trace ID 追踪请求
+
+目标提供 Jaeger 2 的 v3 只读查询入口时，可以用 `diagnose-auto --trace-id` 查看这次请求经过的服务和各段记录。JSON 和 Markdown 报告引用观察到的错误和缺失的父跨度。 [配置与两服务验收](docs/v1.6-request-trace.md)
+
 ## 只读查询 Prometheus 指标
 
 HTTP 健康诊断可以从同一服务的 Prometheus 查询补充错误率和 p95 延迟，恢复后可显式复查并按任务 ID 对比。[配置与隔离验收](docs/v1.1-prometheus.md)
