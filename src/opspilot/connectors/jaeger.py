@@ -3,13 +3,14 @@
 import json
 import re
 from collections.abc import Iterator
+from concurrent.futures import Future, InvalidStateError, TimeoutError as FutureTimeoutError
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from http.client import HTTPConnection, HTTPException, HTTPSConnection
 from ipaddress import ip_address
 from socket import SHUT_RDWR, socket
-from threading import Timer
+from threading import Thread, Timer
 from time import monotonic
 from typing import Literal, cast
 from urllib.parse import quote, urlsplit
@@ -171,6 +172,36 @@ def _remaining(deadline: float) -> float:
     return remaining
 
 
+def _connect_before_deadline(connection: HTTPConnection, deadline: float) -> HTTPConnection:
+    _remaining(deadline)
+    result: Future[Exception | None] = Future()
+
+    def connect() -> None:
+        failure = None
+        try:
+            connection.connect()
+        except Exception as error:
+            connection.close()
+            failure = error
+        try:
+            result.set_result(failure)
+        except InvalidStateError:
+            connection.close()
+
+    # DNS and connection attempts across addresses can outlive a socket timeout.
+    # The worker only connects. A connection that arrives late is closed without sending a GET.
+    Thread(target=connect, daemon=True).start()
+    try:
+        failure = result.result(timeout=_remaining(deadline))
+    except (FutureTimeoutError, TimeoutError) as error:
+        if not result.cancel():
+            connection.close()
+        raise TimeoutError from error
+    if failure is not None:
+        raise failure
+    return connection
+
+
 @contextmanager
 def _interrupt_at_deadline(sock: socket | None, deadline: float) -> Iterator[None]:
     remaining = _remaining(deadline)
@@ -218,8 +249,8 @@ class JaegerConnector:
         timeout = self.config.timeout_seconds
         deadline = monotonic() + timeout
         path = quote(url.path, safe="/%:@!$&'()*+,;=")
-        with closing(connection_type(host, url.port, timeout=timeout)) as connection:
-            connection.connect()
+        connection = connection_type(host, url.port, timeout=timeout)
+        with closing(_connect_before_deadline(connection, deadline)):
             sock = connection.sock
             with _interrupt_at_deadline(sock, deadline):
                 connection.request("GET", path, headers=headers)

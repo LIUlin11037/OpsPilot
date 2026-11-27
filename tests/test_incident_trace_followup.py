@@ -1,9 +1,14 @@
+from threading import Event
+
 import pytest
 
+from opspilot.connectors import jaeger
+from opspilot.connectors.jaeger import JaegerConnector
 from opspilot.core import incident_traces
 from opspilot.core.incident_report import summarize_incident
 from opspilot.core.incident_traces import attach_incident_traces
 from opspilot.core.incident_window import parse_incident_window
+from opspilot.jaeger_config import JaegerConfig
 
 
 WINDOW = parse_incident_window("2024-01-01T00:00:00Z", "2024-01-01T00:01:30Z")
@@ -112,3 +117,43 @@ def test_shared_budget_skips_later_candidates_and_preserves_earlier_results(monk
     assert summary["followups"][0]["trace"]["span_evidence_indexes"] == [4]
     assert report["evidence"][5]["outcome"] == "timeout"
     assert len(report["tool_calls"]) == 2
+
+
+def test_stalled_jaeger_connection_cannot_delay_report_or_send_a_late_get(monkeypatch):
+    entered = Event()
+    release = Event()
+    closed = Event()
+    get_sent = Event()
+
+    class StalledConnection:
+        sock = None
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def connect(self):
+            entered.set()
+            release.wait(timeout=2)
+
+        def request(self, *args, **kwargs):
+            get_sent.set()
+            raise OSError("Unexpected request after an expired connection deadline")
+
+        def close(self):
+            closed.set()
+
+    monkeypatch.setattr(jaeger, "HTTPConnection", StalledConnection)
+    monkeypatch.setattr(incident_traces, "TRACE_FOLLOWUP_BUDGET_SECONDS", 0.15)
+
+    def lookup(trace_id, remaining):
+        return JaegerConnector(JaegerConfig("http://jaeger.example", remaining)).inspect_trace(trace_id)
+
+    try:
+        report = attach_incident_traces(incident((A, B)), lookup)
+        assert entered.is_set() and not closed.is_set(), "Report waited for stalled connection establishment"
+        assert report["evidence"][3]["reason"] == "request_timeout"
+        assert report["incident_traces"]["followups"][1] == {"candidate_index": 1, "skipped_reason": "budget_exhausted"}
+    finally:
+        release.set()
+        assert closed.wait(timeout=2)
+    assert not get_sent.is_set()
