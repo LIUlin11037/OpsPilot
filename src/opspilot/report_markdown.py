@@ -4,8 +4,10 @@ import re
 from collections import Counter
 from collections.abc import Mapping
 from html import escape
+from typing import cast
 
-from opspilot.core.diagnosis import CheckCondition, PlannedCheck, ToolCall
+from opspilot.core.diagnosis import CheckCondition, Evidence, PlannedCheck, ServiceLogEvidence, ToolCall
+from opspilot.core.trace_evidence import IncidentTraceDetails
 from opspilot.report_comparison import (
     EndpointChange,
     EndpointIssue,
@@ -55,6 +57,7 @@ _PLAN_CONDITIONS = {
     "queue_activity": "Pending or unacknowledged messages observed",
     "queue_activity_or_unavailable": "Queue activity observed or queue read unavailable",
     "exact_message_after_service_issue": "Exact message ID supplied and service unhealthy or unknown",
+    "scoped_error_trace_id": "Distinct Trace ID in a scoped error log",
 }
 _INVESTIGATION_REASONS = {
     "configured_service": "Configured starting endpoint",
@@ -310,11 +313,52 @@ def _planned_check_lines(checks: list[PlannedCheck], calls: list[ToolCall] | Non
                 configured_sources[sources[0]] = check["count"]
             for source, count in configured_sources.items():
                 recorded = recorded_sources[tool, source] if calls is not None and tool not in unscoped_tools else None
+                if calls is not None and check["when"] == "scoped_error_trace_id":
+                    recorded = recorded_counts[tool]
                 lines.append(f"| {_value(tool)} | {_value(source)} | {condition} | {count} | {_value(recorded)} |")
         else:
             source_cell = " | " if has_sources else ""
             recorded = recorded_counts[tool] if calls is not None else None
             lines.append(f"| {_value(tool)} | {source_cell}{condition} | {check['count']} | {_value(recorded)} |")
+    return lines
+
+
+def _incident_trace_lines(details: IncidentTraceDetails, evidence: list[Evidence]) -> list[str]:
+    index = details["log_evidence_index"]
+    lines = [
+        "", "## Request trace follow-ups", "",
+        f"- **Service log evidence index** {_value(index)}",
+        f"- **Budget** {details['max_lookups']} lookups, {details['budget_seconds']:g} seconds",
+        f"- **Stop reason** {_value(details['stop_reason'])}",
+    ]
+    if index is None:
+        return lines
+    selection = cast(ServiceLogEvidence, evidence[index]).get("trace_candidates")
+    if selection is None:
+        return lines
+    lines.extend([
+        f"- **Error rows without an ID** {selection['missing_ids']}",
+        f"- **Invalid IDs** {selection['invalid_ids']}",
+        f"- **Duplicate rows** {selection['duplicate_rows']}",
+        f"- **Distinct IDs beyond the limit** {selection['over_limit']}",
+    ])
+    if details["followups"]:
+        lines.extend([
+            "", "| Trace ID | Log line | Error time | Lookup index | Span indexes | Error indexes | Upstream error indexes | Coverage or skip | Gaps |",
+            "| --- | ---: | --- | ---: | --- | --- | --- | --- | --- |",
+        ])
+    for followup in details["followups"]:
+        candidate = selection["candidates"][followup["candidate_index"]]
+        trace = followup.get("trace")
+        prefix = f"| {_value(candidate['trace_id'])} | {candidate['line_number']} | {_value(candidate['timestamp'])} |"
+        if trace is None:
+            lines.append(f"{prefix} | | | | {_value(followup['skipped_reason'])} | |")
+            continue
+        lines.append(
+            f"{prefix} {followup['lookup_evidence_index']} | {_value(trace['span_evidence_indexes'])} | "
+            f"{_value(trace['leaf_error_evidence_indexes'])} | {_value(trace['upstream_error_evidence_indexes'])} | "
+            f"{_value(trace['coverage'])} | {_value(trace['gaps'])} |"
+        )
     return lines
 
 
@@ -397,6 +441,10 @@ def render_markdown(report: StoredReport) -> str:
             f"- **Incomplete evidence indexes** {_value(incident['unavailable_evidence_indexes'])}",
             f"- **Stop reason** {_value(incident['stop_reason'])}",
         ])
+
+    incident_traces = report.get("incident_traces")
+    if incident_traces is not None:
+        lines.extend(_incident_trace_lines(incident_traces, report["evidence"]))
 
     investigation = report.get("investigation")
     if investigation is not None:

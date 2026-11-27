@@ -47,20 +47,21 @@ from opspilot.core.diagnosis import (
 )
 from opspilot.core.health_diagnosis import MetricCheck, run_health_diagnosis
 from opspilot.core.incident_report import summarize_incident
+from opspilot.core.incident_traces import TRACE_FOLLOWUP_BUDGET_SECONDS, attach_incident_traces
 from opspilot.core.incident_window import IncidentWindow, parse_incident_window
 from opspilot.core.investigation import InvestigationTool, run_investigation, unavailable_read
 from opspilot.core.model_routing import REQUEST_FIELDS, AdvisableWorkflow
 from opspilot.core.request_trace import run_request_trace
 from opspilot.core.startup import run_startup
 from opspilot.core.target_trace import run_target_trace
-from opspilot.core.trace_evidence import normalize_trace_id
+from opspilot.core.trace_evidence import MAX_INCIDENT_TRACE_LOOKUPS, RequestTraceRead, normalize_trace_id
 from opspilot.core.triage import select_diagnosis_route
 from opspilot.handoff import export_reports, import_reports
 from opspilot.health_config import DEFAULT_HEALTH_TIMEOUT_SECONDS, HealthConfig, load_health_config
 from opspilot.investigation_store import (
     InvestigationBusyError, InvestigationRequest, TaskJournal, create_task, load_task, lock_task,
 )
-from opspilot.jaeger_config import MAX_RESPONSE_BYTES, MAX_SPANS
+from opspilot.jaeger_config import MAX_RESPONSE_BYTES, MAX_SPANS, JaegerConfig
 from opspilot.prometheus_config import PrometheusConfig
 from opspilot.report_comparison import (
     compare_health_reports, compare_queue_reports, compare_trace_reports, compare_voting_reports,
@@ -331,14 +332,26 @@ def _run_configured_health(
 
 def _run_incident_window(
     question: str, service: HealthTool, log_path: Path, metrics: PrometheusConfig, window: IncidentWindow,
+    followup: JaegerConfig | None = None,
 ) -> DiagnosisReport:
     log = JsonlServiceLogConnector(log_path)
     report = run_health_diagnosis(
-        question, service, service_log=lambda _: log.inspect_window(window, metrics.service),
+        question, service, service_log=lambda _: log.inspect_window(
+            window, metrics.service, include_trace_candidates=followup is not None,
+        ),
         check_service_log=True, metric_checks=_configured_metric_checks(metrics, window),
         check_metrics=True, metric_budget_seconds=metrics.timeout_seconds,
     )
-    return summarize_incident(report, window, metrics.service)
+    report = summarize_incident(report, window, metrics.service)
+    if followup is None:
+        return report
+    token = os.getenv("OPSPILOT_JAEGER_TOKEN")
+
+    def lookup(trace_id: str, remaining: float) -> RequestTraceRead:
+        config = replace(followup, timeout_seconds=min(followup.timeout_seconds, remaining))
+        return JaegerConnector(config, token).inspect_trace(trace_id)
+
+    return attach_incident_traces(report, lookup)
 
 
 def _investigation_request(target: TargetConfig, message_id: str | None) -> InvestigationRequest:
@@ -518,6 +531,9 @@ def _prepare_incident_window(
     health, metrics = target.health, target.prometheus
     if health is None or health.service_log_path is None or metrics is None:
         raise ValueError("An incident window requires health.service_log_path and a prometheus section in --config.")
+    followup = target.jaeger if args.follow_traces else None
+    if args.follow_traces and followup is None:
+        raise ValueError("--follow-traces requires a jaeger section in --config.")
     service = _http_health_tool(health.service_url, health.timeout_seconds, "service_url")
     plan: DiagnosisPlan = {
         "question": question,
@@ -536,7 +552,15 @@ def _prepare_incident_window(
         ],
     }
 
-    return plan, partial(_run_incident_window, question, service, health.service_log_path, metrics, window)
+    if followup is not None:
+        plan["checks"].append({
+            "tool": "inspect_request_trace", "when": "scoped_error_trace_id", "count": MAX_INCIDENT_TRACE_LOOKUPS,
+            "sources": [followup.base_url], "method": "GET",
+            "timeout_seconds": min(followup.timeout_seconds, TRACE_FOLLOWUP_BUDGET_SECONDS),
+            "total_timeout_seconds": TRACE_FOLLOWUP_BUDGET_SECONDS,
+            "max_response_bytes": MAX_RESPONSE_BYTES, "max_spans": MAX_SPANS,
+        })
+    return plan, partial(_run_incident_window, question, service, health.service_log_path, metrics, window, followup)
 
 
 def _prepare_request_trace(
@@ -545,7 +569,8 @@ def _prepare_request_trace(
     if any(value is not None for value in (
         args.workflow, args.incident_start, args.incident_end, args.health_config,
         args.management_url, args.queue, args.vhost, args.timeout, args.max_steps, args.max_seconds, args.model_routing,
-    )) or any((args.check_dependencies, args.check_service_log, args.check_metrics, args.check_consumer_health)):
+    )) or any((args.check_dependencies, args.check_service_log, args.check_metrics, args.check_consumer_health,
+              args.follow_traces)):
         raise ValueError("--trace-id cannot be combined with other workflow, scope, or check options.")
     trace_id = normalize_trace_id(args.trace_id)
     if args.config is None:
@@ -582,6 +607,8 @@ def _prepare_auto_diagnosis(
         return _prepare_request_trace(args, question)
     if args.incident_start is not None or args.incident_end is not None:
         return _prepare_incident_window(args, question)
+    if args.follow_traces:
+        raise ValueError("--follow-traces requires an incident window.")
     if args.message_id is not None:
         if not args.message_id.strip():
             raise ValueError("--message-id must not be empty")
@@ -926,6 +953,7 @@ def main() -> None:
     auto_diagnose.add_argument("--check-metrics", action="store_true", help="Check configured service metrics explicitly.")
     auto_diagnose.add_argument("--incident-start", help="Start of the historical window, in ISO 8601 with a time zone.")
     auto_diagnose.add_argument("--incident-end", help="End of the historical window, in ISO 8601 with a time zone.")
+    auto_diagnose.add_argument("--follow-traces", action="store_true", help="Follow scoped error-log Trace IDs in an incident window.")
     auto_diagnose.add_argument(
         "--workflow", choices=("http_health", "queue", "investigation"), help="Select a workflow explicitly.",
     )
