@@ -278,6 +278,8 @@ JSON 报告包含任务 ID、用户提交的问题、诊断状态和结论。每
 
 目标提供 Jaeger 2 的 v3 只读查询入口时，可以用 `diagnose-auto --trace-id` 查看这次请求经过的服务和各段记录。JSON 和 Markdown 报告引用观察到的错误和缺失的父跨度。 [配置与两服务验收](docs/v1.6-request-trace.md)
 
+历史故障调查可加 `--follow-traces`，从目标服务和故障时间窗内的错误日志选取最近 3 个不同请求，按 Trace ID 只读查询 Jaeger，并在同一份报告里回读日志依据、跨度与查询缺口。 [配置与验收记录](docs/v1.7-incident-trace-followup.md)
+
 ## 只读查询 Prometheus 指标
 
 HTTP 健康诊断可以从同一服务的 Prometheus 查询补充错误率和 p95 延迟，恢复后可显式复查并按任务 ID 对比。[配置与隔离验收](docs/v1.1-prometheus.md)
