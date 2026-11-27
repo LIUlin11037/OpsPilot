@@ -2,9 +2,10 @@
 
 import json
 import sqlite3
+from collections.abc import Sequence
 from contextlib import closing
 from pathlib import Path
-from typing import TypedDict
+from typing import TypedDict, cast
 from uuid import uuid4
 
 from opspilot.adapters.voting_snapshot import is_voting_trace
@@ -124,3 +125,36 @@ def list_reports(
             if len(summaries) == limit:
                 break
     return summaries
+
+def load_reports_for_export(database: Path, task_ids: Sequence[str]) -> list[StoredReport]:
+    if not database.is_file():
+        raise ValueError(f"Source report database does not exist: {database}")
+    placeholders = ", ".join("?" for _ in task_ids)
+    with closing(open_read_only(database)) as connection:
+        rows = connection.execute(
+            f"SELECT task_id, payload FROM reports WHERE task_id IN ({placeholders}) ORDER BY rowid",
+            tuple(task_ids),
+        ).fetchall()
+    found = {task_id for task_id, _ in rows}
+    missing = [task_id for task_id in task_ids if task_id not in found]
+    if missing:
+        raise ValueError(f"No reports found for task IDs: {', '.join(missing)}")
+    return [{**json.loads(payload), "task_id": task_id} for task_id, payload in rows]
+
+
+def store_imported_reports(database: Path, reports: Sequence[StoredReport]) -> None:
+    database_uri = f"{database.resolve().as_uri()}?mode=rw"
+    with closing(sqlite3.connect(database_uri, uri=True)) as connection, connection:
+        connection.execute("BEGIN IMMEDIATE")
+        initialize_reports(connection)
+        ids = [report["task_id"] for report in reports]
+        placeholders = ", ".join("?" for _ in ids)
+        conflicts = connection.execute(
+            f"SELECT task_id FROM reports WHERE task_id IN ({placeholders}) ORDER BY rowid", ids,
+        ).fetchall()
+        if conflicts:
+            names = ", ".join(task_id for (task_id,) in conflicts)
+            raise ValueError(f"Receiving database already contains task IDs: {names}")
+        for report in reports:
+            payload = {key: value for key, value in report.items() if key != "task_id"}
+            insert_report(connection, report["task_id"], cast(DiagnosisReport, payload))

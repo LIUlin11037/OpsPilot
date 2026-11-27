@@ -1,0 +1,451 @@
+[
+  {
+    "id": "healthy",
+    "origin": "traefik",
+    "question": "Check the service health.",
+    "inputs": {
+      "http_status": 200
+    },
+    "expected": {
+      "status": "no_failure_observed",
+      "processing_correlation": null,
+      "routing": {
+        "workflow": "http_health"
+      },
+      "evidence": [
+        {
+          "tool": "inspect_service_health",
+          "outcome": "observed",
+          "health": "healthy",
+          "http_status": 200
+        }
+      ]
+    }
+  },
+  {
+    "id": "http-fault",
+    "origin": "traefik",
+    "question": "Check the HTTP timeout symptoms.",
+    "inputs": {
+      "http_status": 504,
+      "metrics": {
+        "error_rate": [
+          [-30, "1"],
+          [-25, "1"],
+          [-20, "1"],
+          [-15, "1"],
+          [-10, "1"],
+          [-5, "1"],
+          [0, "1"]
+        ],
+        "latency_p95": [
+          [-30, "1.1549999999999998"],
+          [-25, "1.1549999999999998"],
+          [-20, "1.1549999999999998"],
+          [-15, "1.155"],
+          [-10, "1.1549999999999998"],
+          [-5, "1.155"],
+          [0, "1.1549999999999998"]
+        ]
+      }
+    },
+    "expected": {
+      "status": "undetermined",
+      "processing_correlation": null,
+      "routing": {
+        "workflow": "http_health"
+      },
+      "evidence": [
+        {
+          "tool": "inspect_service_health",
+          "outcome": "observed",
+          "health": "unhealthy",
+          "http_status": 504
+        },
+        {
+          "tool": "inspect_service_metrics",
+          "outcome": "observed",
+          "query_name": "error_rate",
+          "service": "orders",
+          "unit": "ratio",
+          "peak_value": 1,
+          "threshold_exceeded": true,
+          "sample_count": 7,
+          "trigger": "service_unhealthy"
+        },
+        {
+          "tool": "inspect_service_metrics",
+          "outcome": "observed",
+          "query_name": "latency_p95",
+          "service": "orders",
+          "unit": "seconds",
+          "peak_value": 1.155,
+          "threshold_exceeded": true,
+          "sample_count": 7,
+          "trigger": "service_unhealthy"
+        }
+      ]
+    }
+  },
+  {
+    "id": "recovered-history",
+    "origin": "traefik",
+    "question": "Review the incident window after recovery.",
+    "inputs": {
+      "http_status": 200,
+      "window": [
+        "2024-01-01T00:00:00+00:00",
+        "2024-01-01T00:01:30+00:00"
+      ],
+      "metrics": {
+        "error_rate": [
+          [-30, "1"],
+          [-25, "1"],
+          [-20, "1"],
+          [-15, "1"],
+          [-10, "1"],
+          [-5, "1"],
+          [0, "1"]
+        ],
+        "latency_p95": [
+          [-30, "1.155"],
+          [-25, "1.1549999999999998"],
+          [-20, "1.1549999999999998"],
+          [-15, "1.1549999999999998"],
+          [-10, "1.155"],
+          [-5, "1.1549999999999998"],
+          [0, "1.155"]
+        ]
+      },
+      "logs": [
+        {
+          "timestamp": "2024-01-01T00:00:00.062055+00:00",
+          "service": "orders",
+          "level": "ERROR",
+          "http_status": 504
+        },
+        {
+          "timestamp": "2024-01-01T00:00:01.065507+00:00",
+          "service": "neighbor",
+          "level": "INFO",
+          "http_status": 200
+        },
+        {
+          "timestamp": "2024-01-01T00:00:01.327919+00:00",
+          "service": "orders",
+          "level": "ERROR",
+          "http_status": 504
+        }
+      ]
+    },
+    "expected": {
+      "status": "undetermined",
+      "processing_correlation": null,
+      "routing": {
+        "workflow": "http_health"
+      },
+      "evidence": [
+        {
+          "tool": "inspect_service_health",
+          "outcome": "observed",
+          "health": "healthy",
+          "http_status": 200
+        },
+        {
+          "tool": "inspect_service_log",
+          "outcome": "observed",
+          "window_start": "2024-01-01T00:00:00+00:00",
+          "window_end": "2024-01-01T00:01:30+00:00",
+          "service": "orders",
+          "error_count": 2,
+          "matched_entries": 2,
+          "unscoped_entries": 0
+        },
+        {
+          "tool": "inspect_service_metrics",
+          "outcome": "observed",
+          "query_name": "error_rate",
+          "service": "orders",
+          "unit": "ratio",
+          "peak_value": 1,
+          "threshold_exceeded": true,
+          "sample_count": 7,
+          "window_start": "2024-01-01T00:00:00+00:00",
+          "window_end": "2024-01-01T00:01:30+00:00",
+          "trigger": "incident_window"
+        },
+        {
+          "tool": "inspect_service_metrics",
+          "outcome": "observed",
+          "query_name": "latency_p95",
+          "service": "orders",
+          "unit": "seconds",
+          "peak_value": 1.155,
+          "threshold_exceeded": true,
+          "sample_count": 7,
+          "window_start": "2024-01-01T00:00:00+00:00",
+          "window_end": "2024-01-01T00:01:30+00:00",
+          "trigger": "incident_window"
+        }
+      ],
+      "planned_scope": {
+        "service": "orders",
+        "incident_start": "2024-01-01T00:00:00+00:00",
+        "incident_end": "2024-01-01T00:01:30+00:00"
+      },
+      "incident": {
+        "window_start": "2024-01-01T00:00:00+00:00",
+        "window_end": "2024-01-01T00:01:30+00:00",
+        "service": "orders",
+        "current_health": "healthy",
+        "current_evidence_index": 0,
+        "window_status": "anomaly_observed",
+        "window_evidence_indexes": [
+          1,
+          2,
+          3
+        ],
+        "anomaly_evidence_indexes": [
+          1,
+          2,
+          3
+        ],
+        "unavailable_evidence_indexes": [],
+        "stop_reason": "checks_complete"
+      }
+    }
+  },
+  {
+    "id": "history-source-timeout",
+    "origin": "simulation",
+    "question": "Review a historical window with an unresponsive metrics source.",
+    "inputs": {
+      "http_status": 200,
+      "window": [
+        "2024-01-01T00:00:00+00:00",
+        "2024-01-01T00:01:30+00:00"
+      ],
+      "metrics": {
+        "error_rate": "query_timeout"
+      },
+      "logs": [
+        {
+          "timestamp": "2024-01-01T00:00:30+00:00",
+          "service": "orders",
+          "level": "INFO",
+          "http_status": 200
+        }
+      ]
+    },
+    "expected": {
+      "status": "undetermined",
+      "processing_correlation": null,
+      "routing": {
+        "workflow": "http_health"
+      },
+      "evidence": [
+        {
+          "tool": "inspect_service_health",
+          "outcome": "observed",
+          "health": "healthy",
+          "http_status": 200
+        },
+        {
+          "tool": "inspect_service_log",
+          "outcome": "observed",
+          "window_start": "2024-01-01T00:00:00+00:00",
+          "window_end": "2024-01-01T00:01:30+00:00",
+          "service": "orders",
+          "error_count": 0,
+          "matched_entries": 1,
+          "unscoped_entries": 0
+        },
+        {
+          "tool": "inspect_service_metrics",
+          "outcome": "timeout",
+          "reason": "query_timeout",
+          "query_name": "error_rate",
+          "window_start": "2024-01-01T00:00:00+00:00",
+          "window_end": "2024-01-01T00:01:30+00:00",
+          "service": "orders"
+        }
+      ],
+      "planned_scope": {
+        "service": "orders",
+        "incident_start": "2024-01-01T00:00:00+00:00",
+        "incident_end": "2024-01-01T00:01:30+00:00"
+      },
+      "incident": {
+        "window_start": "2024-01-01T00:00:00+00:00",
+        "window_end": "2024-01-01T00:01:30+00:00",
+        "service": "orders",
+        "current_health": "healthy",
+        "current_evidence_index": 0,
+        "window_status": "undetermined",
+        "window_evidence_indexes": [
+          1,
+          2
+        ],
+        "anomaly_evidence_indexes": [],
+        "unavailable_evidence_indexes": [
+          2
+        ],
+        "stop_reason": "sources_incomplete"
+      }
+    }
+  },
+  {
+    "id": "scope-isolation",
+    "origin": "simulation",
+    "question": "Check the target service during the incident window.",
+    "inputs": {
+      "http_status": 200,
+      "window": [
+        "2024-01-01T00:00:00+00:00",
+        "2024-01-01T00:01:30+00:00"
+      ],
+      "metrics": {
+        "error_rate": [
+          [-30, "0"],
+          [-25, "0"],
+          [-20, "0"],
+          [-15, "0"],
+          [-10, "0"],
+          [-5, "0"],
+          [0, "0"]
+        ]
+      },
+      "logs": [
+        {
+          "timestamp": "2024-01-01T00:00:15+00:00",
+          "service": "orders",
+          "level": "INFO",
+          "http_status": 200
+        },
+        {
+          "timestamp": "2024-01-01T00:00:30+00:00",
+          "service": "neighbor",
+          "level": "ERROR",
+          "http_status": 504
+        },
+        {
+          "timestamp": "2024-01-01T00:01:31+00:00",
+          "service": "orders",
+          "level": "ERROR",
+          "http_status": 504
+        }
+      ]
+    },
+    "expected": {
+      "status": "no_failure_observed",
+      "processing_correlation": null,
+      "routing": {
+        "workflow": "http_health"
+      },
+      "evidence": [
+        {
+          "tool": "inspect_service_health",
+          "outcome": "observed",
+          "health": "healthy",
+          "http_status": 200
+        },
+        {
+          "tool": "inspect_service_log",
+          "outcome": "observed",
+          "window_start": "2024-01-01T00:00:00+00:00",
+          "window_end": "2024-01-01T00:01:30+00:00",
+          "service": "orders",
+          "error_count": 0,
+          "matched_entries": 1,
+          "unscoped_entries": 0
+        },
+        {
+          "tool": "inspect_service_metrics",
+          "outcome": "observed",
+          "query_name": "error_rate",
+          "service": "orders",
+          "unit": "ratio",
+          "peak_value": 0,
+          "threshold_exceeded": false,
+          "sample_count": 7,
+          "window_start": "2024-01-01T00:00:00+00:00",
+          "window_end": "2024-01-01T00:01:30+00:00",
+          "trigger": "incident_window"
+        }
+      ],
+      "planned_scope": {
+        "service": "orders",
+        "incident_start": "2024-01-01T00:00:00+00:00",
+        "incident_end": "2024-01-01T00:01:30+00:00"
+      },
+      "incident": {
+        "window_start": "2024-01-01T00:00:00+00:00",
+        "window_end": "2024-01-01T00:01:30+00:00",
+        "service": "orders",
+        "current_health": "healthy",
+        "current_evidence_index": 0,
+        "window_status": "no_anomaly_observed",
+        "window_evidence_indexes": [
+          1,
+          2
+        ],
+        "anomaly_evidence_indexes": [],
+        "unavailable_evidence_indexes": [],
+        "stop_reason": "checks_complete"
+      }
+    }
+  },
+  {
+    "id": "unrelated-message",
+    "origin": "simulation",
+    "question": "Check processing for the requested message.",
+    "inputs": {
+      "message_id": "requested-message",
+      "queue": {
+        "messages_ready": 3,
+        "messages_unacknowledged": 1,
+        "consumers": 1
+      },
+      "processing": [
+        {
+          "queue": "orders",
+          "vhost": "/",
+          "message_id": "different-message",
+          "result": "failed",
+          "attempted_at": "2024-01-01T00:00:30Z"
+        }
+      ]
+    },
+    "expected": {
+      "status": "undetermined",
+      "processing_correlation": "unknown",
+      "routing": {
+        "workflow": "queue"
+      },
+      "requested_message_id": "requested-message",
+      "planned_scope": {
+        "queue": "orders",
+        "vhost": "/",
+        "message_id": "requested-message"
+      },
+      "evidence": [
+        {
+          "tool": "inspect_queue",
+          "outcome": "observed",
+          "pending_messages": 3,
+          "unacknowledged_messages": 1
+        },
+        {
+          "tool": "inspect_processing",
+          "outcome": "observed",
+          "row_count": 0,
+          "reason": "message_not_found"
+        }
+      ]
+    },
+    "absent": [
+      "evidence.1.result",
+      "evidence.1.message_id"
+    ]
+  }
+]

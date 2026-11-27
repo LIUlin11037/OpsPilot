@@ -266,6 +266,14 @@ JSON 报告包含任务 ID、用户提交的问题、诊断状态和结论。每
 
 如需指定数据库路径，在子命令前加 `--db PATH`。诊断和查询时使用同一路径。
 
+## 离线交接诊断报告
+
+用任务 ID 导出所选报告为 ZIP。接手人可解压阅读 Markdown，或导入本地 SQLite 后继续查看证据和比较报告。[离线交接步骤和 Traefik 验收](docs/v1.4-offline-handoff.md)
+
+## 离线复跑诊断回归
+
+在已安装 OpsPilot 的环境里运行 `python examples/diagnostic-regression/run.py`，用固定观测重跑真实的诊断和报告入口。命令会指出哪个案例的结论、证据或范围偏离了预期。[回归用法与验收记录](docs/v1.5-diagnostic-regression.md)
+
 ## 只读查询 Prometheus 指标
 
 HTTP 健康诊断可以从同一服务的 Prometheus 查询补充错误率和 p95 延迟，恢复后可显式复查并按任务 ID 对比。[配置与隔离验收](docs/v1.1-prometheus.md)
