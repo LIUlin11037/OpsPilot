@@ -11,13 +11,14 @@ from langgraph.graph import END, START, StateGraph
 
 from opspilot.core.incident_report import IncidentDetails
 from opspilot.core.metrics import MetricRead
+from opspilot.core.trace_evidence import RequestSpanEvidence, RequestTraceSummary, TraceLookupEvidence
 
 UnavailableOutcome = Literal["timeout", "missing"]
 ObservationOutcome = Literal["observed", UnavailableOutcome]
 ToolName = Literal[
     "inspect_queue", "inspect_consumer", "inspect_processing", "inspect_target_trace",
     "inspect_service_health", "inspect_dependency_health", "inspect_consumer_endpoint",
-    "inspect_service_log", "inspect_service_metrics",
+    "inspect_service_log", "inspect_service_metrics", "inspect_request_trace",
 ]
 ProcessingResult = Literal["succeeded", "failed"]
 ProcessingCorrelation = Literal["matched", "not_in_sample", "unknown"]
@@ -149,7 +150,7 @@ ProcessingRead = ProcessingEvidence | EmptyProcessingEvidence | UnavailableEvide
 
 Evidence = (
     QueueEvidence | ConsumerEvidence | ProcessingRead |
-    TraceEvidence | HealthEvidence | ServiceLogEvidence | MetricEvidence
+    TraceEvidence | HealthEvidence | ServiceLogEvidence | MetricEvidence | TraceLookupEvidence | RequestSpanEvidence
 )
 
 
@@ -346,6 +347,7 @@ class DiagnosisReport(DiagnosisReportFields, total=False):
     planned_checks: list[PlannedCheck]
     investigation: InvestigationDetails
     incident: IncidentDetails
+    request_trace: RequestTraceSummary
     previous_task_id: str
 
 
