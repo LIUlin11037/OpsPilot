@@ -3,11 +3,13 @@
 import json
 import re
 from collections.abc import Iterator
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from http.client import HTTPConnection, HTTPException, HTTPSConnection
 from ipaddress import ip_address
+from socket import SHUT_RDWR, socket
+from threading import Timer
 from time import monotonic
 from typing import Literal, cast
 from urllib.parse import quote, urlsplit
@@ -81,10 +83,14 @@ def _array(container: object, key: str) -> list:
 def _span_rows(frame: object) -> Iterator[tuple[str | None, object]]:
     if not isinstance(frame, dict):
         raise _ReadFailure("invalid_response")
-    error = frame.get("error")
-    if isinstance(error, dict):
+    if "error" in frame:
+        error = frame["error"]
+        if "result" in frame or not isinstance(error, dict):
+            raise _ReadFailure("invalid_response")
         http = error.get("httpCode")
         grpc = error.get("grpcCode", error.get("code"))
+        if not (type(http) is int and 400 <= http <= 599 or type(grpc) is int and 1 <= grpc <= 16):
+            raise _ReadFailure("invalid_response")
         if type(http) is int and http == 404:
             raise _ReadFailure("trace_not_found")
         if type(http) is int and http in _HTTP_ERRORS:
@@ -158,6 +164,40 @@ def _loopback(host: str) -> bool:
         return host == "localhost"
 
 
+def _remaining(deadline: float) -> float:
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise TimeoutError
+    return remaining
+
+
+@contextmanager
+def _interrupt_at_deadline(sock: socket | None, deadline: float) -> Iterator[None]:
+    remaining = _remaining(deadline)
+    if sock is None:
+        yield
+        return
+
+    def interrupt() -> None:
+        try:
+            sock.shutdown(SHUT_RDWR)
+        except OSError:
+            pass
+
+    # http.client may perform several reads for headers or chunk framing. Bound those waits together.
+    timer = Timer(remaining, interrupt)
+    timer.daemon = True
+    timer.start()
+    try:
+        yield
+    except (OSError, HTTPException) as error:
+        if monotonic() >= deadline:
+            raise TimeoutError from error
+        raise
+    finally:
+        timer.cancel()
+
+
 @dataclass(frozen=True)
 class JaegerConnector:
     config: JaegerConfig
@@ -179,31 +219,30 @@ class JaegerConnector:
         deadline = monotonic() + timeout
         path = quote(url.path, safe="/%:@!$&'()*+,;=")
         with closing(connection_type(host, url.port, timeout=timeout)) as connection:
-            connection.request("GET", path, headers=headers)
+            connection.connect()
             sock = connection.sock
-            if sock is not None:
-                sock.settimeout(max(0.001, deadline - monotonic()))
-            with connection.getresponse() as response:
-                if response.status not in (200, 404):
-                    return response.status
-                if response.length is not None and response.length > MAX_RESPONSE_BYTES:
-                    raise _ReadFailure("response_limit")
-                while not response.isclosed():
-                    remaining = deadline - monotonic()
-                    if remaining <= 0:
-                        raise TimeoutError
-                    if sock is not None:
-                        sock.settimeout(remaining)
-                    chunk = response.read1(min(16384, MAX_RESPONSE_BYTES + 1 - len(body)))
-                    if not chunk:
-                        break
-                    body.extend(chunk)
-                    if len(body) > MAX_RESPONSE_BYTES:
-                        del body[MAX_RESPONSE_BYTES:]
+            with _interrupt_at_deadline(sock, deadline):
+                connection.request("GET", path, headers=headers)
+                _remaining(deadline)
+                with connection.getresponse() as response:
+                    _remaining(deadline)
+                    if response.status not in (200, 404):
+                        return response.status
+                    if response.length is not None and response.length > MAX_RESPONSE_BYTES:
                         raise _ReadFailure("response_limit")
-                if response.length:
-                    raise _ReadFailure("invalid_response")
-                return response.status
+                    while not response.isclosed():
+                        _remaining(deadline)
+                        chunk = response.read1(min(16384, MAX_RESPONSE_BYTES + 1 - len(body)))
+                        _remaining(deadline)
+                        if not chunk:
+                            break
+                        body.extend(chunk)
+                        if len(body) > MAX_RESPONSE_BYTES:
+                            del body[MAX_RESPONSE_BYTES:]
+                            raise _ReadFailure("response_limit")
+                    if response.length:
+                        raise _ReadFailure("invalid_response")
+                    return response.status
 
     def inspect_trace(self, trace_id: str) -> RequestTraceRead:
         trace_id = normalize_trace_id(trace_id)

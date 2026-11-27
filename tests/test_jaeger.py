@@ -101,6 +101,9 @@ def test_response_bytes_are_bounded(processing_service, monkeypatch):
 
 def test_timeout_does_not_turn_into_an_empty_lookup(monkeypatch):
     class TimedOutConnection(HTTPConnection):
+        def connect(self):
+            pass
+
         def request(self, *args, **kwargs):
             raise TimeoutError
 
@@ -108,6 +111,69 @@ def test_timeout_does_not_turn_into_an_empty_lookup(monkeypatch):
     connector = JaegerConnector(parse_jaeger_config({"base_url": "http://127.0.0.1:16686"}))
     read = connector.inspect_trace(TRACE_ID)
     assert read["outcome"] == "timeout" and read["reason"] == "request_timeout"
+
+
+@pytest.mark.parametrize("phase", ["headers", "last_read"])
+def test_late_http_result_cannot_report_success(phase, monkeypatch):
+    now = 0.0
+
+    class Response:
+        status = 403 if phase == "headers" else 200
+        length = len(frame(recorded_span()))
+        closed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            pass
+
+        def isclosed(self):
+            return self.closed
+
+        def read1(self, size):
+            nonlocal now
+            now = 5.5
+            self.closed, self.length = True, 0
+            return frame(recorded_span())
+
+    class Connection:
+        sock = None
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def connect(self):
+            pass
+
+        def request(self, *args, **kwargs):
+            pass
+
+        def getresponse(self):
+            nonlocal now
+            if phase == "headers":
+                now = 5.5
+            return Response()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(jaeger, "HTTPConnection", Connection)
+    monkeypatch.setattr(jaeger, "monotonic", lambda: now)
+    read = JaegerConnector(parse_jaeger_config({"base_url": "http://127.0.0.1"})).inspect_trace(TRACE_ID)
+    assert read["outcome"] == "timeout" and read["reason"] == "request_timeout" and not read["spans"]
+
+
+@pytest.mark.parametrize("invalid", [
+    {"error": "backend failure", "result": {"resourceSpans": []}},
+    {"error": {"httpCode": 403}, "result": {"resourceSpans": []}},
+    {"error": {}},
+])
+def test_invalid_response_envelope_preserves_preceding_frames(processing_service, invalid):
+    body = frame(recorded_span()) + json.dumps(invalid).encode() + b"\n"
+    read = query(processing_service, 200, body)
+    assert read["outcome"] == "missing" and read["reason"] == "invalid_response"
+    assert [span["span_id"] for span in read["spans"]] == ["0102030405060708"]
 
 
 @pytest.mark.parametrize("section, field", [

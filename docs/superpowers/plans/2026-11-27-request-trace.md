@@ -26,27 +26,27 @@
 
 ### Task 1. Type, attribute and report the request evidence
 
-- [ ] Add `tests/test_request_trace.py` covering normalized IDs, linked healthy and ancestor/downstream errors, parallel branches, missing links, conflicts, cycles, foreign IDs, no match and unavailable or partial reads. Check topology and evidence indexes alongside status.
-- [ ] Run the focused tests and verify failure because the request trace workflow is absent.
-- [ ] Add `src/opspilot/core/trace_evidence.py` with `normalize_trace_id(value: str) -> str`, `TraceSpan`, `RequestTraceRead`, per-span and lookup evidence, and `RequestTraceSummary`. Use `source`, `observed_at`, `outcome`, `spans` and `gaps` in the read, and optional `reason`. Span IDs and parents are canonical hex strings; the optional parent uses null for a root.
-- [ ] Add `run_request_trace(question: str, trace_id: str, source: Callable[[str], RequestTraceRead]) -> DiagnosisReport` in `src/opspilot/core/request_trace.py`. Use one measured LangGraph read, preserve verified spans, and emit an ordered evidence list. Add its fields to `src/opspilot/core/diagnosis.py`.
-- [ ] Verify fresh startup, focused tests and the full suite, then commit core evidence and design.
+- [x] Add `tests/test_request_trace.py` covering normalized IDs, linked healthy and ancestor/downstream errors, parallel branches, missing links, conflicts, cycles, foreign IDs, no match and unavailable or partial reads. Check topology and evidence indexes alongside status.
+- [x] Run the focused tests and verify failure because the request trace workflow is absent.
+- [x] Add `src/opspilot/core/trace_evidence.py` with `normalize_trace_id(value: str) -> str`, `TraceSpan`, `RequestTraceRead`, per-span and lookup evidence, and `RequestTraceSummary`. Use `source`, `observed_at`, `outcome`, `spans` and `gaps` in the read, and optional `reason`. Span IDs and parents are canonical hex strings; the optional parent uses null for a root.
+- [x] Add `run_request_trace(question: str, trace_id: str, source: Callable[[str], RequestTraceRead]) -> DiagnosisReport` in `src/opspilot/core/request_trace.py`. Use one measured LangGraph read, preserve verified spans, and emit an ordered evidence list. Add its fields to `src/opspilot/core/diagnosis.py`.
+- [x] Verify fresh startup, focused tests and the full suite, then commit core evidence and design.
 
 ### Task 2. Read Jaeger v3 within explicit limits
 
-- [ ] Add `tests/test_jaeger.py` with loopback HTTP fixtures for v3 result envelopes, multiple frames, no match, unauthorized, timeout, mismatched IDs, malformed frames with partial evidence, and byte and span caps. Check read method, route and credential handling.
-- [ ] Confirm the tests fail for the absent connector. Implement `src/opspilot/jaeger_config.py` with `JaegerConfig` and `parse_jaeger_config(value: object) -> JaegerConfig`. Integrate optional config with `src/opspilot/target_config.py` and expose the approved limits.
-- [ ] Implement `JaegerConnector(config: JaegerConfig, token: str | None = None)` and `.inspect_trace(trace_id: str) -> RequestTraceRead` in `src/opspilot/connectors/jaeger.py`. The `endpoint(trace_id: str) -> str` method performs local path construction. Map response envelopes and trace IDs before keeping necessary observation fields.
-- [ ] Verify the focused and full suites and startup, then commit the connector and target config.
+- [x] Add `tests/test_jaeger.py` with loopback HTTP fixtures for v3 result envelopes, multiple frames, no match, unauthorized, timeout, mismatched IDs, malformed frames with partial evidence, and byte and span caps. Check read method, route and credential handling.
+- [x] Confirm the tests fail for the absent connector. Implement `src/opspilot/jaeger_config.py` with `JaegerConfig` and `parse_jaeger_config(value: object) -> JaegerConfig`. Integrate optional config with `src/opspilot/target_config.py` and expose the approved limits.
+- [x] Implement `JaegerConnector(config: JaegerConfig, token: str | None = None)` and `.inspect_trace(trace_id: str) -> RequestTraceRead` in `src/opspilot/connectors/jaeger.py`. The `endpoint(trace_id: str) -> str` method performs local path construction. Map response envelopes and trace IDs before keeping necessary observation fields.
+- [x] Verify the focused and full suites and startup, then commit the connector and target config.
 
 ### Task 3. Integrate preview, diagnosis and report readback
 
-- [ ] Add `tests/test_request_trace_cli.py` for offline `--plan`, conflicting flags, lookup plus original task ID readback, Markdown evidence and a prior-format report. Confirm the CLI cannot yet recognize `--trace-id`.
-- [ ] Modify `src/opspilot/__main__.py` and `src/opspilot/report_markdown.py`. Use `diagnose-auto --config ... --trace-id ...` and the existing `report` subcommand. Use `OPSPILOT_JAEGER_TOKEN` only for the connector. Record requested scope and limits in the preview and report.
-- [ ] Verify startup, focused cases and full tests, then commit the CLI and renderer.
+- [x] Add `tests/test_request_trace_cli.py` for offline `--plan`, conflicting flags, lookup plus original task ID readback, Markdown evidence and a prior-format report. Confirm the CLI cannot yet recognize `--trace-id`.
+- [x] Modify `src/opspilot/__main__.py` and `src/opspilot/report_markdown.py`. Use `diagnose-auto --config ... --trace-id ...` and the existing `report` subcommand. Use `OPSPILOT_JAEGER_TOKEN` only for the connector. Record requested scope and limits in the preview and report.
+- [x] Verify startup, focused cases and full tests, then commit the CLI and renderer.
 
 ### Task 4. Verify two isolated services through a real Jaeger backend
 
-- [ ] Prepare an opt-in example in `examples/jaeger-request-trace/` and a pinned Jaeger 2.23 backend. Issue actual HTTP requests through two services. Record requested Trace IDs for normal, downstream 5xx and omitted intermediate parent span cases.
-- [ ] Read the real trace query endpoint and compare stable span IDs, service, parents, status and timestamps against the saved report. Read the Markdown back by the three task IDs and confirm references. Update `README.md` and `docs/v1.6-request-trace.md` with the recorded IDs, provenance and reproduction commands.
-- [ ] Verify startup, the full suite and v1.5 offline regression, then commit the sample and acceptance record. Review the whole branch from `9fc7d6b` and verify any necessary corrections before closing the goal.
+- [x] Prepare an opt-in example in `examples/jaeger-request-trace/` and a pinned Jaeger 2.23 backend. Issue actual HTTP requests through two services. Record requested Trace IDs for normal, downstream 5xx and omitted intermediate parent span cases.
+- [x] Read the real trace query endpoint and compare stable span IDs, service, parents, status and timestamps against the saved report. Read the Markdown back by the three task IDs and confirm references. Update `README.md` and `docs/v1.6-request-trace.md` with the recorded IDs, provenance and reproduction commands.
+- [x] Verify startup, the full suite and v1.5 offline regression, then commit the sample and acceptance record. Review the whole branch from `9fc7d6b` and verify any necessary corrections before closing the goal.
