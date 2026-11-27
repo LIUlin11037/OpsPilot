@@ -81,3 +81,21 @@ class TraceLogSelection(TypedDict):
     invalid_ids: int
     duplicate_rows: int
     over_limit: int
+
+
+class _FollowedRequestFields(TypedDict):
+    candidate_index: int
+
+
+class FollowedRequest(_FollowedRequestFields, total=False):
+    lookup_evidence_index: int
+    trace: RequestTraceSummary
+    skipped_reason: Literal["budget_exhausted"]
+
+
+class IncidentTraceDetails(TypedDict):
+    log_evidence_index: int | None
+    max_lookups: int
+    budget_seconds: float
+    stop_reason: Literal["logs_unavailable", "no_valid_trace_ids", "lookups_complete", "budget_exhausted"]
+    followups: list[FollowedRequest]

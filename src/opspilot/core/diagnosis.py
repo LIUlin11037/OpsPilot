@@ -11,7 +11,9 @@ from langgraph.graph import END, START, StateGraph
 
 from opspilot.core.incident_report import IncidentDetails
 from opspilot.core.metrics import MetricRead
-from opspilot.core.trace_evidence import RequestSpanEvidence, RequestTraceSummary, TraceLogSelection, TraceLookupEvidence
+from opspilot.core.trace_evidence import (
+    IncidentTraceDetails, RequestSpanEvidence, RequestTraceSummary, TraceLogSelection, TraceLookupEvidence,
+)
 
 UnavailableOutcome = Literal["timeout", "missing"]
 ObservationOutcome = Literal["observed", UnavailableOutcome]
@@ -169,6 +171,7 @@ CheckCondition = Literal[
     "service_unhealthy", "service_unhealthy_or_unknown",
     "service_unhealthy_or_unknown_or_log_errors", "queue_activity",
     "queue_activity_or_unavailable", "exact_message_after_service_issue",
+    "scoped_error_trace_id",
 ]
 
 
@@ -196,6 +199,7 @@ class PlannedCheck(_PlannedCheckFields, total=False):
     method: Literal["GET"]
     max_response_bytes: int
     max_spans: int
+    total_timeout_seconds: float
 
 
 class _SkippedCheckFields(TypedDict):
@@ -352,6 +356,7 @@ class DiagnosisReport(DiagnosisReportFields, total=False):
     investigation: InvestigationDetails
     incident: IncidentDetails
     request_trace: RequestTraceSummary
+    incident_traces: IncidentTraceDetails
     previous_task_id: str
 
 

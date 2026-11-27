@@ -19,7 +19,7 @@ from opspilot.core.trace_evidence import (
 
 class _RequestTraceState(TypedDict, total=False):
     read: RequestTraceRead
-    call: ToolCall
+    duration_ms: float
     report: DiagnosisReport
 
 
@@ -122,6 +122,37 @@ def _conclusion(summary: RequestTraceSummary) -> str:
     return " ".join(details)
 
 
+def build_request_trace_report(
+    question: str, trace_id: str, read: RequestTraceRead, duration_ms: float,
+) -> DiagnosisReport:
+    trace_id = normalize_trace_id(trace_id)
+    gaps = set(read["gaps"])
+    spans = _matching_spans(read, trace_id, gaps)
+    summary = _summarize(trace_id, read, spans, gaps)
+    lookup: TraceLookupEvidence = {
+        "tool": "inspect_request_trace", "outcome": read["outcome"], "source": read["source"],
+        "observed_at": read["observed_at"], "trace_id": trace_id, "span_count": len(spans),
+    }
+    if "reason" in read:
+        lookup["reason"] = read["reason"]
+    evidence: list[Evidence] = [lookup]
+    for span in spans:
+        item: RequestSpanEvidence = {
+            **span, "tool": "inspect_request_trace", "outcome": "observed",
+            "source": read["source"], "observed_at": read["observed_at"],
+        }
+        evidence.append(item)
+    call: ToolCall = {
+        "tool": "inspect_request_trace", "outcome": read["outcome"], "source": read["source"], "duration_ms": duration_ms,
+    }
+    healthy = summary["coverage"] == "linked" and not summary["leaf_error_evidence_indexes"]
+    return {
+        "question": question, "status": "no_failure_observed" if healthy else "undetermined",
+        "conclusion": _conclusion(summary), "processing_correlation": None, "request_trace": summary,
+        "evidence": evidence, "tool_calls": [call], "next_checks": suggest_next_checks(evidence),
+    }
+
+
 def run_request_trace(
     question: str, trace_id: str, source: Callable[[str], RequestTraceRead],
 ) -> DiagnosisReport:
@@ -129,34 +160,10 @@ def run_request_trace(
 
     def inspect(_state: _RequestTraceState) -> _RequestTraceState:
         read, duration = measure_tool_call(lambda: source(trace_id))
-        return {"read": read, "call": {
-            "tool": "inspect_request_trace", "outcome": read["outcome"], "source": read["source"], "duration_ms": duration,
-        }}
+        return {"read": read, "duration_ms": duration}
 
     def report(state: _RequestTraceState) -> _RequestTraceState:
-        read = state["read"]
-        gaps = set(read["gaps"])
-        spans = _matching_spans(read, trace_id, gaps)
-        summary = _summarize(trace_id, read, spans, gaps)
-        lookup: TraceLookupEvidence = {
-            "tool": "inspect_request_trace", "outcome": read["outcome"], "source": read["source"],
-            "observed_at": read["observed_at"], "trace_id": trace_id, "span_count": len(spans),
-        }
-        if "reason" in read:
-            lookup["reason"] = read["reason"]
-        evidence: list[Evidence] = [lookup]
-        for span in spans:
-            item: RequestSpanEvidence = {
-                **span, "tool": "inspect_request_trace", "outcome": "observed",
-                "source": read["source"], "observed_at": read["observed_at"],
-            }
-            evidence.append(item)
-        healthy = summary["coverage"] == "linked" and not summary["leaf_error_evidence_indexes"]
-        return {"report": {
-            "question": question, "status": "no_failure_observed" if healthy else "undetermined",
-            "conclusion": _conclusion(summary), "processing_correlation": None, "request_trace": summary,
-            "evidence": evidence, "tool_calls": [state["call"]], "next_checks": suggest_next_checks(evidence),
-        }}
+        return {"report": build_request_trace_report(question, trace_id, state["read"], state["duration_ms"])}
 
     graph = StateGraph(_RequestTraceState)
     graph.add_node("inspect_request_trace", inspect)
