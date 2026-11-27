@@ -3,8 +3,11 @@ import json
 import sqlite3
 from contextlib import closing
 from zipfile import ZIP_DEFLATED, ZipFile
+from zlib import crc32
 
 import pytest
+
+import opspilot.handoff as handoff
 
 from opspilot.handoff import export_reports
 from opspilot.task_store import insert_report, list_reports, load_report, save_report
@@ -117,3 +120,53 @@ def test_existing_task_conflict_rejects_all_rows(tmp_path, packaged_reports):
 
     assert load_report(database, reports[0]["task_id"]) is None
     assert database.read_bytes() == original
+
+
+
+def test_import_checks_actual_uncompressed_member_size(tmp_path, packaged_reports, monkeypatch):
+    original, _ = packaged_reports
+    package = tmp_path / "report-copy.zip"
+    destination = tmp_path / "absent.sqlite3"
+    with ZipFile(original) as source:
+        contents = {name: source.read(name) for name in source.namelist()}
+    markdown = contents["reports/1.md"]
+    contents["reports/1.md"] += b"\nExtra content\n"
+    with ZipFile(package, "w", compression=ZIP_DEFLATED) as archive:
+        for name, content in contents.items():
+            archive.writestr(name, content)
+
+    class InconsistentEntryMetadata(ZipFile):
+        def infolist(self):
+            entries = super().infolist()
+            entry = self.getinfo("reports/1.md")
+            entry.file_size = len(markdown)
+            entry.CRC = crc32(markdown)
+            return entries
+
+    monkeypatch.setattr(handoff, "ZipFile", InconsistentEntryMetadata)
+
+    with pytest.raises(ValueError, match="Invalid size"):
+        _import(package, destination)
+
+    assert not destination.exists()
+
+
+def test_import_limits_directory_records_before_opening_archive(tmp_path, monkeypatch):
+    package = tmp_path / "too-many-entries.zip"
+    with ZipFile(package, "w") as archive:
+        for index in range(202):
+            archive.writestr(f"report-{index}", b"")
+    opened = []
+
+    def track_open(*args, **kwargs):
+        opened.append(True)
+        return ZipFile(*args, **kwargs)
+
+    monkeypatch.setattr(handoff, "ZipFile", track_open)
+    destination = tmp_path / "absent.sqlite3"
+
+    with pytest.raises(ValueError, match="entries"):
+        _import(package, destination)
+
+    assert not opened
+    assert not destination.exists()
