@@ -11,7 +11,7 @@ from langgraph.graph import END, START, StateGraph
 
 from opspilot.core.incident_report import IncidentDetails
 from opspilot.core.metrics import MetricRead
-from opspilot.core.trace_evidence import RequestSpanEvidence, RequestTraceSummary, TraceLookupEvidence
+from opspilot.core.trace_evidence import RequestSpanEvidence, RequestTraceSummary, TraceLogSelection, TraceLookupEvidence
 
 UnavailableOutcome = Literal["timeout", "missing"]
 ObservationOutcome = Literal["observed", UnavailableOutcome]
@@ -104,6 +104,7 @@ class ServiceLogReadFields(Observation):
 class ServiceLogRead(ServiceLogReadFields, total=False):
     error_count: int
     reason: str
+    trace_candidates: TraceLogSelection
 
 
 class ServiceLogEvidence(ServiceLogRead):

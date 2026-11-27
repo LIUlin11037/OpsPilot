@@ -5,6 +5,7 @@ from typing import Literal, TypedDict
 
 _TRACE_ID = re.compile(r"(?:[0-9a-fA-F]{16}|[0-9a-fA-F]{32})")
 TraceCoverage = Literal["linked", "incomplete", "not_found", "unavailable"]
+MAX_INCIDENT_TRACE_LOOKUPS = 3
 
 
 def normalize_trace_id(value: str) -> str:
@@ -65,3 +66,18 @@ class RequestTraceSummary(TypedDict):
     upstream_error_evidence_indexes: list[int]
     missing_parent_span_ids: list[str]
     gaps: list[str]
+
+
+class TraceLogCandidate(TypedDict):
+    trace_id: str
+    line_number: int
+    timestamp: str
+    level: str
+
+
+class TraceLogSelection(TypedDict):
+    candidates: list[TraceLogCandidate]
+    missing_ids: int
+    invalid_ids: int
+    duplicate_rows: int
+    over_limit: int
