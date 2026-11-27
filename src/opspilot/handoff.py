@@ -1,16 +1,19 @@
-"""Create a local ZIP containing only explicitly selected saved reports."""
+"""Export and import explicitly selected saved reports in a local ZIP."""
 
 import hashlib
 import json
 import os
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from math import isfinite
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from zipfile import ZIP_DEFLATED, ZipFile
+from typing import cast
+from zipfile import ZIP_DEFLATED, ZIP_STORED, BadZipFile, ZipFile, ZipInfo
+from zlib import error as ZlibError
 
 from opspilot.report_markdown import render_markdown
-from opspilot.task_store import load_reports_for_export
+from opspilot.task_store import StoredReport, load_reports_for_export, store_imported_reports
 
 _PACKAGE_VERSION = 1
 _MAX_REPORTS = 100
@@ -73,4 +76,115 @@ def export_reports(database: Path, destination: Path, task_ids: Sequence[str]) -
             archive.writestr(_MANIFEST, raw_manifest)
             for name, content in entries.items():
                 archive.writestr(name, content)
+    return [report["task_id"] for report in reports]
+
+
+def _finite_float(text: str) -> float:
+    value = float(text)
+    if not isfinite(value):
+        raise ValueError("JSON contains a non-finite number.")
+    return value
+
+
+def _decode_json(data: bytes, name: str) -> object:
+    try:
+        return json.loads(data.decode("utf-8"), parse_float=_finite_float, parse_constant=_finite_float)
+    except (ValueError, RecursionError) as error:
+        raise ValueError(f"Invalid JSON in package entry {name}.") from error
+
+
+def _read_entry(archive: ZipFile, entry: ZipInfo) -> bytes:
+    with archive.open(entry) as stream:
+        data = stream.read(entry.file_size + 1)
+    if len(data) != entry.file_size:
+        raise ValueError(f"Invalid size for package entry {entry.filename}.")
+    return data
+
+
+def _manifest_reports(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, dict) or type(value.get("version")) is not int or value["version"] != _PACKAGE_VERSION:
+        raise ValueError("Unsupported report package version.")
+    reports = value.get("reports")
+    if value.keys() != {"version", "reports"} or not isinstance(reports, list) or not 1 <= len(reports) <= _MAX_REPORTS:
+        raise ValueError("Invalid report package manifest.")
+    task_ids: set[str] = set()
+    for item in reports:
+        if (
+            not isinstance(item, dict) or item.keys() != {"task_id", "json_sha256", "markdown_sha256"}
+            or not all(isinstance(field, str) and field.strip() for field in item.values())
+        ):
+            raise ValueError("Invalid report package manifest entry.")
+        if item["task_id"] in task_ids:
+            raise ValueError(f"Report package contains a duplicate task ID: {item['task_id']}")
+        task_ids.add(item["task_id"])
+    return reports
+
+
+def _validated_report(value: object, task_id: str) -> StoredReport:
+    if (
+        not isinstance(value, dict) or value.get("task_id") != task_id
+        or any(not isinstance(value.get(field), str) for field in ("question", "conclusion", "status"))
+        or "processing_correlation" not in value
+        or value["processing_correlation"] is not None and not isinstance(value["processing_correlation"], str)
+        or not isinstance(value.get("evidence"), list)
+        or any(
+            not isinstance(item, dict) or any(
+                not isinstance(item.get(field), str) for field in ("tool", "source", "observed_at", "outcome")
+            )
+            for item in value["evidence"]
+        )
+    ):
+        raise ValueError(f"Invalid report for task ID {task_id}.")
+    report = cast(StoredReport, value)
+    try:
+        render_markdown(report)
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"Invalid report for task ID {task_id}.") from error
+    return report
+
+
+def _read_package(package: Path) -> list[StoredReport]:
+    if package.stat().st_size > _MAX_BYTES + 1024 * 1024:
+        raise ValueError("Report package exceeds the size limit.")
+    try:
+        with ZipFile(package) as archive:
+            records = archive.infolist()
+            entries = {record.filename: record for record in records}
+            if len(entries) != len(records):
+                raise ValueError("Report package contains a duplicate ZIP entry.")
+            if sum(record.file_size for record in records) > _MAX_BYTES:
+                raise ValueError("Report package exceeds the 32 MiB uncompressed size limit.")
+            if _MANIFEST not in entries or len(entries) > 1 + 2 * _MAX_REPORTS:
+                raise ValueError("Invalid report package entries.")
+            if any(record.compress_type not in (ZIP_DEFLATED, ZIP_STORED) or record.flag_bits & 1 for record in records):
+                raise ValueError("Unsupported report package compression or encryption.")
+            manifest = _manifest_reports(_decode_json(_read_entry(archive, entries[_MANIFEST]), _MANIFEST))
+            names = [_report_names(index) for index in range(1, len(manifest) + 1)]
+            if set(entries) != {_MANIFEST, *(name for pair in names for name in pair)}:
+                raise ValueError("Report package entries do not match its manifest.")
+
+            reports: list[StoredReport] = []
+            for item, (json_name, markdown_name) in zip(manifest, names):
+                raw_report = _read_entry(archive, entries[json_name])
+                markdown = _read_entry(archive, entries[markdown_name])
+                if _digest(raw_report) != item["json_sha256"] or _digest(markdown) != item["markdown_sha256"]:
+                    raise ValueError(f"Report package checksum mismatch for task ID {item['task_id']}.")
+                try:
+                    markdown.decode("utf-8")
+                except UnicodeError as error:
+                    raise ValueError(f"Invalid UTF-8 in package entry {markdown_name}.") from error
+                reports.append(_validated_report(_decode_json(raw_report, json_name), item["task_id"]))
+            return reports
+    except (BadZipFile, EOFError, RuntimeError, ZlibError) as error:
+        raise ValueError("Invalid report ZIP.") from error
+
+
+def import_reports(package: Path, database: Path) -> list[str]:
+    reports = _read_package(package)
+    if database.exists():
+        store_imported_reports(database, reports)
+    else:
+        with _publish_new_file(database) as staging:
+            staging.touch(exist_ok=False)
+            store_imported_reports(staging, reports)
     return [report["task_id"] for report in reports]
