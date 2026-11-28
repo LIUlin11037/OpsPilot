@@ -96,6 +96,35 @@ def _at(report: StoredReport, index: int) -> Evidence:
     return report["evidence"][index]
 
 
+def _trace_evidence(report: StoredReport, index: int, trace_id: str, *, span: bool) -> Evidence:
+    item = _at(report, index)
+    marker = "span_id" if span else "span_count"
+    if item["tool"] != "inspect_request_trace" or item.get("trace_id") != trace_id or marker not in item:
+        raise ValueError(f"Task {report['task_id']} has invalid trace evidence for {trace_id}.")
+    return item
+
+
+def _trace_entry(report: StoredReport, followup: FollowedRequest, candidate: TraceLogCandidate) -> TraceEntry:
+    trace = followup.get("trace")
+    lookup_index = followup.get("lookup_evidence_index")
+    trace_id = candidate["trace_id"]
+    reason = None
+    if trace is not None:
+        if trace["trace_id"] != trace_id or lookup_index is None:
+            raise ValueError(f"Task {report['task_id']} has a trace follow-up that does not match its candidate.")
+        lookup = _trace_evidence(report, lookup_index, trace_id, span=False)
+        reason = lookup.get("reason")
+        spans = set(trace["span_evidence_indexes"])
+        errors = set(trace["leaf_error_evidence_indexes"]) | set(trace["upstream_error_evidence_indexes"])
+        if not errors <= spans:
+            raise ValueError(f"Task {report['task_id']} has trace error references outside its spans.")
+        for index in spans:
+            _trace_evidence(report, index, trace_id, span=True)
+    elif lookup_index is not None or "skipped_reason" not in followup:
+        raise ValueError(f"Task {report['task_id']} has an invalid skipped trace follow-up.")
+    return {"candidate": candidate, "followup": followup, "lookup_reason": reason}
+
+
 def _traces(report: StoredReport) -> TraceContext | None:
     details = report.get("incident_traces")
     if details is None:
@@ -111,12 +140,7 @@ def _traces(report: StoredReport) -> TraceContext | None:
             index = followup["candidate_index"]
             if type(index) is not int or not 0 <= index < len(candidates):
                 raise ValueError(f"Task {report['task_id']} has an invalid trace candidate index.")
-            lookup_index = followup.get("lookup_evidence_index")
-            lookup = _at(report, lookup_index) if lookup_index is not None else None
-            entries.append({
-                "candidate": candidates[index], "followup": followup,
-                "lookup_reason": lookup.get("reason") if lookup is not None else None,
-            })
+            entries.append(_trace_entry(report, followup, candidates[index]))
     return {"log_evidence_index": log_index, "stop_reason": details["stop_reason"], "entries": entries}
 
 

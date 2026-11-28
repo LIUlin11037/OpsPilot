@@ -102,8 +102,8 @@ def test_different_log_source_and_mismatched_window_keep_saved_values_visible():
     assert metric["limitations"] == ["after_scope_incomplete"]
 
 
-def test_trace_context_uses_only_its_own_candidates_and_evidence():
-    before, after = incident_report("before"), incident_report("after")
+def traced_report():
+    before = incident_report("before")
     before["evidence"][1]["trace_candidates"] = {
         "candidates": [{"trace_id": TRACE_ID, "timestamp": START, "line_number": 7, "level": "ERROR"}],
         "missing_ids": 0, "invalid_ids": 0, "duplicate_rows": 0, "over_limit": 0,
@@ -119,6 +119,11 @@ def test_trace_context_uses_only_its_own_candidates_and_evidence():
             "upstream_error_evidence_indexes": [], "missing_parent_span_ids": [], "gaps": [],
         }}],
     }
+    return before
+
+
+def test_trace_context_uses_only_its_own_candidates_and_evidence():
+    before, after = traced_report(), incident_report("after")
     original = deepcopy(before)
     result = compare_incident_reports(before, after)
     assert result["after"]["trace_followups"] is None
@@ -126,3 +131,21 @@ def test_trace_context_uses_only_its_own_candidates_and_evidence():
     assert entry["candidate"]["line_number"] == 7 and entry["candidate"]["trace_id"] == TRACE_ID
     assert entry["lookup_reason"] == "trace_not_found" and entry["followup"]["lookup_evidence_index"] == 3
     assert before == original
+
+
+@pytest.mark.parametrize("mismatch", ["candidate", "lookup", "span", "error_span"])
+def test_rejects_trace_attribution_to_another_candidate_or_observation(mismatch):
+    before = traced_report()
+    followup = before["incident_traces"]["followups"][0]
+    if mismatch == "candidate":
+        selection = before["evidence"][1]["trace_candidates"]["candidates"]
+        selection.append({**selection[0], "trace_id": "b" * 32})
+        followup["candidate_index"] = 1
+    elif mismatch == "lookup":
+        before["evidence"][3]["trace_id"] = "b" * 32
+    elif mismatch == "span":
+        followup["trace"]["span_evidence_indexes"] = [0]
+    else:
+        followup["trace"]["leaf_error_evidence_indexes"] = [3]
+    with pytest.raises(ValueError, match="before.*trace"):
+        compare_incident_reports(before, incident_report("after"))
