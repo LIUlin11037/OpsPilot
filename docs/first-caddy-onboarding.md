@@ -9,7 +9,8 @@
 ```powershell
 $inputs = Resolve-Path .opspilot/caddy-inputs
 $work = New-Item -ItemType Directory -Path .opspilot/first-caddy
-$handoff = Get-Content (Join-Path $inputs 'handoff.json') -Raw | ConvertFrom-Json
+$manifest = Join-Path $inputs 'handoff.json'
+$handoff = Get-Content $manifest -Raw | ConvertFrom-Json
 $config = Join-Path $work.FullName 'target.json'
 $log = Join-Path $work.FullName 'gateway.jsonl'
 $db = Join-Path $work.FullName 'reports.sqlite3'
@@ -23,14 +24,19 @@ python examples/caddy-onboarding/map_access_logs.py (Join-Path $inputs 'gateway-
 
 ## 预览、执行和回读
 
+用 Python 从交接文件读取窗口时间，保留原有的时区与 ISO 格式。
+
 ```powershell
-$scope = @('--config', $config, '--incident-start', $handoff.incident_start, '--incident-end', $handoff.incident_end, '--follow-traces')
+$window = python -c "import json, sys; from pathlib import Path; d = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8-sig')); print(d['incident_start']); print(d['incident_end'])" $manifest
+$scope = @('--config', $config, '--incident-start', $window[0], '--incident-end', $window[1], '--follow-traces')
 python -m opspilot --db $db diagnose-auto @scope --plan 'Investigate Caddy gateway'
 python -m opspilot --db $db diagnose-auto @scope 'Investigate Caddy gateway'
 python -m opspilot --db $db report TASK_ID --format markdown
 ```
 
 把 `TASK_ID` 换成第二条命令返回的 ID。预览显示服务、窗口及最多 3 次按 Trace ID 的只读查询。报告分开显示当前 HTTP 和历史异常。追踪条目中的日志行属于转换后的 `gateway.jsonl`，本次查询及跨度索引可对照同一份报告的证据表。若日志、指标或追踪查不到，先查看报告里的来源和缺口原因。
+
+表中的 `Upstream error indexes` 指请求链上较早的父跨度，例如网关。`Error indexes` 指沿父子关系未观测到更下游错误的跨度，例如本例中返回 5xx 的上游服务。
 
 已有两个同一目标的历史调查任务时，可以离线执行下列对比。每个证据索引引用自己的任务 ID。
 

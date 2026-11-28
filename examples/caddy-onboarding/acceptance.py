@@ -71,8 +71,10 @@ def counter(status):
 
 def traffic(directory, expected):
     before = counter(expected)
-    start = datetime.now(timezone.utc).replace(microsecond=0)
+    now = datetime.now(timezone.utc)
+    start = now.replace(microsecond=0) + timedelta(seconds=1)
     end = start + timedelta(seconds=WINDOW_SECONDS)
+    sleep((start - now).total_seconds())
     count = 0
     while datetime.now(timezone.utc) < end - timedelta(seconds=0.5):
         status, _ = get(GATEWAY)

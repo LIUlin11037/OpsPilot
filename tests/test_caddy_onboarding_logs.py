@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -40,3 +41,13 @@ def test_rejects_malformed_access_row_without_overwriting_an_existing_export(tmp
     assert result.returncode == 2 and "line 2" in result.stderr
     assert output.read_text(encoding="utf-8") == "existing snapshot"
     assert "different paths" in run(source, source).stderr
+
+
+def test_rejects_an_output_that_is_a_hard_link_to_the_original(tmp_path):
+    source, alias = tmp_path / "raw.jsonl", tmp_path / "alias.jsonl"
+    original = '{"logger":"http.log.access.log0","ts":1,"status":200}\n'
+    source.write_text(original, encoding="utf-8")
+    os.link(source, alias)
+    result = run(source, alias)
+    assert result.returncode == 2 and "different paths" in result.stderr
+    assert source.read_text(encoding="utf-8") == original

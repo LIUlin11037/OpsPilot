@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def map_access_logs(source: Path, destination: Path, service: str) -> None:
-    if source.resolve() == destination.resolve():
+    if source.resolve() == destination.resolve() or (destination.exists() and source.samefile(destination)):
         raise ValueError("Source and destination must be different paths.")
     if not service.strip():
         raise ValueError("Service must not be empty.")
