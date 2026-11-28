@@ -8,6 +8,7 @@ from typing import cast
 
 from opspilot.core.diagnosis import CheckCondition, Evidence, PlannedCheck, ServiceLogEvidence, ToolCall
 from opspilot.core.trace_evidence import IncidentTraceDetails
+from opspilot.incident_comparison import IncidentComparison, IncidentObservation, IndexedWindowEvidence
 from opspilot.report_comparison import (
     EndpointChange,
     EndpointIssue,
@@ -76,6 +77,22 @@ _VOTING_FIELDS = {
     "stored_vote.outcome": "PostgreSQL query outcome",
     "stored_vote.row_count": "PostgreSQL matching rows",
     "stored_vote.reason": "PostgreSQL reason",
+}
+_WINDOW_RELATIONS = {
+    "same_window": "Same historical window",
+    "overlap": "Overlapping historical windows",
+    "after_window_later": "Follow-up window is later",
+    "after_window_earlier": "Follow-up window is earlier",
+}
+_WINDOW_LIMITATIONS = {
+    "before_missing": "Baseline observation absent",
+    "after_missing": "Follow-up observation absent",
+    "before_unavailable": "Baseline observation unavailable",
+    "after_unavailable": "Follow-up observation unavailable",
+    "before_scope_incomplete": "Baseline scope incomplete",
+    "after_scope_incomplete": "Follow-up scope incomplete",
+    "different_configuration": "Different configurations",
+    "different_window_length": "Different window lengths for raw log counts",
 }
 _EVIDENCE_FIELDS = {
     "health": "Health",
@@ -321,6 +338,87 @@ def _planned_check_lines(checks: list[PlannedCheck], calls: list[ToolCall] | Non
             recorded = recorded_counts[tool] if calls is not None else None
             lines.append(f"| {_value(tool)} | {source_cell}{condition} | {check['count']} | {_value(recorded)} |")
     return lines
+
+
+def _window_observation_text(observation: IndexedWindowEvidence | None) -> str:
+    if observation is None:
+        return "No saved observation"
+    evidence = observation["evidence"]
+    return (
+        f"Evidence {observation['evidence_index']}, {_value(evidence['source'])}, "
+        f"{_value(evidence['outcome'])}, {_evidence_details(evidence)}"
+    )
+
+
+def _comparison_trace_lines(side: IncidentObservation) -> list[str]:
+    lines = ["", f"### Task {_value(side['task_id'])}", ""]
+    traces = side["trace_followups"]
+    if traces is None:
+        return [*lines, "No trace follow-ups recorded."]
+    lines += [
+        f"- **Log evidence index** {_value(traces['log_evidence_index'])}",
+        f"- **Stop reason** {_value(traces['stop_reason'])}",
+    ]
+    if traces["entries"]:
+        lines += [
+            "", "| Trace ID | Log line | Lookup index | Span indexes | Coverage or skip | Gaps |",
+            "| --- | ---: | ---: | --- | --- | --- |",
+        ]
+    for entry in traces["entries"]:
+        candidate, followup = entry["candidate"], entry["followup"]
+        trace = followup.get("trace")
+        result = trace["coverage"] if trace else followup.get("skipped_reason")
+        gaps = list(trace["gaps"]) if trace else []
+        if entry["lookup_reason"] and entry["lookup_reason"] not in gaps:
+            gaps.append(entry["lookup_reason"])
+        lines.append(
+            f"| {_value(candidate['trace_id'])} | {candidate['line_number']} | "
+            f"{_value(followup.get('lookup_evidence_index'))} | "
+            f"{_value(trace['span_evidence_indexes'] if trace else [])} | {_value(result)} | {_value(gaps)} |"
+        )
+    return lines
+
+
+def render_incident_comparison_markdown(comparison: IncidentComparison) -> str:
+    before, after = comparison["before"], comparison["after"]
+    lines = [
+        "# OpsPilot incident window comparison", "",
+        f"- **Service** {_value(comparison['service'])}",
+        f"- **HTTP probe** {_value(comparison['service_url'])}",
+        f"- **Window relation** {_WINDOW_RELATIONS[comparison['window_relation']]}",
+        "", "Evidence indexes refer to the task in their own column.", "",
+        f"| Observation | Baseline {_value(before['task_id'])} | Follow-up {_value(after['task_id'])} |",
+        "| --- | --- | --- |",
+    ]
+    baseline_http, followup_http = before["current_http"], after["current_http"]
+    lines.append(
+        f"| Current HTTP | Evidence {baseline_http['evidence_index']}, {_evidence_details(baseline_http['evidence'])} | "
+        f"Evidence {followup_http['evidence_index']}, {_evidence_details(followup_http['evidence'])} |"
+    )
+    lines.append(
+        f"| HTTP observed at | {_value(baseline_http['evidence']['observed_at'])} | "
+        f"{_value(followup_http['evidence']['observed_at'])} |"
+    )
+    for field, label in (
+        ("window_start", "Historical start"), ("window_end", "Historical end"),
+        ("window_status", "Historical status"), ("anomaly_evidence_indexes", "Anomaly evidence indexes"),
+        ("unavailable_evidence_indexes", "Incomplete evidence indexes"), ("stop_reason", "Stop reason"),
+    ):
+        lines.append(f"| {label} | {_value(before['window'][field])} | {_value(after['window'][field])} |")
+    lines.extend([
+        "", "## Historical observations", "",
+        "| Check | Baseline | Follow-up | Comparison |", "| --- | --- | --- | --- |",
+    ])
+    for pair in comparison["observations"]:
+        limitations = ", ".join(_WINDOW_LIMITATIONS[item] for item in pair["limitations"])
+        lines.append(
+            f"| {_value(pair['name'])} | {_window_observation_text(pair['before'])} | "
+            f"{_window_observation_text(pair['after'])} | {limitations or 'Comparable'} |"
+        )
+    lines.extend(["", "## Request trace follow-ups"])
+    lines.extend(_comparison_trace_lines(before))
+    lines.extend(_comparison_trace_lines(after))
+    return "\n".join(lines) + "\n"
 
 
 def _incident_trace_lines(details: IncidentTraceDetails, evidence: list[Evidence]) -> list[str]:

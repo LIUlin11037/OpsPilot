@@ -58,6 +58,7 @@ from opspilot.core.trace_evidence import MAX_INCIDENT_TRACE_LOOKUPS, RequestTrac
 from opspilot.core.triage import select_diagnosis_route
 from opspilot.handoff import export_reports, import_reports
 from opspilot.health_config import DEFAULT_HEALTH_TIMEOUT_SECONDS, HealthConfig, load_health_config
+from opspilot.incident_comparison import compare_incident_reports
 from opspilot.investigation_store import (
     InvestigationBusyError, InvestigationRequest, TaskJournal, create_task, load_task, lock_task,
 )
@@ -68,6 +69,7 @@ from opspilot.report_comparison import (
 )
 from opspilot.report_markdown import (
     render_health_comparison_markdown,
+    render_incident_comparison_markdown,
     render_markdown,
     render_queue_comparison_markdown,
     render_voting_comparison_markdown,
@@ -1040,6 +1042,9 @@ def main() -> None:
         "compare-http": commands.add_parser(
             "compare-http", help="Compare saved HTTP health reports for one service."
         ),
+        "compare-incident": commands.add_parser(
+            "compare-incident", help="Compare two saved historical investigations for the same service."
+        ),
         "compare-http-latest": commands.add_parser(
             "compare-http-latest", help="Compare the two most recently saved reports for one HTTP service."
         ),
@@ -1050,14 +1055,14 @@ def main() -> None:
             "compare-queue-latest", help="Compare the two most recently saved reports for one queue."
         ),
     }
-    for command in ("compare-hirehub", "compare-voting", "compare-http", "compare-queue"):
+    for command in ("compare-hirehub", "compare-voting", "compare-http", "compare-incident", "compare-queue"):
         comparison_parser = report_comparisons[command]
         comparison_parser.add_argument("before_task_id", help="Task ID of the baseline report.")
         comparison_parser.add_argument("after_task_id", help="Task ID of the follow-up report.")
     queue_comparisons = ("compare-queue", "compare-queue-latest")
     http_comparisons = ("compare-http", "compare-http-latest")
     voting_comparisons = ("compare-voting", "compare-voting-latest")
-    for command in (*voting_comparisons, *http_comparisons, *queue_comparisons):
+    for command in (*voting_comparisons, *http_comparisons, *queue_comparisons, "compare-incident"):
         report_comparisons[command].add_argument(
             "--format", choices=("json", "markdown"), default="json"
         )
@@ -1203,6 +1208,10 @@ def main() -> None:
             try:
                 if args.command == "compare-hirehub":
                     comparison = compare_trace_reports(before, after)
+                elif args.command == "compare-incident":
+                    comparison = compare_incident_reports(before, after)
+                    if args.format == "markdown":
+                        markdown = render_incident_comparison_markdown(comparison)
                 elif args.command in voting_comparisons:
                     comparison = compare_voting_reports(before, after)
                     if args.format == "markdown":
