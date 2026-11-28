@@ -1,0 +1,23 @@
+{
+	auto_https off
+	admin off
+	metrics
+}
+
+http://:8080 {
+	log {
+		output file /data/gateway-access.jsonl
+		format json
+	}
+	@work path /work
+	route @work {
+		tracing {
+			span gateway
+		}
+		reverse_proxy upstream:8080
+	}
+}
+
+http://:9180 {
+	metrics /metrics
+}

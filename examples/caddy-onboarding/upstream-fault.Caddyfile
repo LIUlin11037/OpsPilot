@@ -1,0 +1,12 @@
+{
+	auto_https off
+}
+
+http://:8080 {
+	route /work {
+		tracing {
+			span upstream
+		}
+		respond "isolated upstream fault" 503
+	}
+}

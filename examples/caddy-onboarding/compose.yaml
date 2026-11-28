@@ -1,0 +1,35 @@
+services:
+  gateway:
+    image: caddy:2.11.9-alpine
+    volumes:
+      - ./gateway.Caddyfile:/etc/caddy/Caddyfile:ro
+    environment:
+      OTEL_SERVICE_NAME: caddy-gateway
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_SAMPLER: always_on
+      OTEL_BSP_SCHEDULE_DELAY: '200'
+    ports:
+      - '127.0.0.1:18771:8080'
+  upstream:
+    image: caddy:2.11.9-alpine
+    volumes:
+      - ./upstream.Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./upstream-fault.Caddyfile:/etc/caddy/fault.Caddyfile:ro
+    environment:
+      OTEL_SERVICE_NAME: caddy-upstream
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_SAMPLER: always_on
+      OTEL_BSP_SCHEDULE_DELAY: '200'
+  prometheus:
+    image: prom/prometheus:v3.13.5
+    command: ['--config.file=/etc/prometheus/prometheus.yml', '--storage.tsdb.path=/prometheus']
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - '127.0.0.1:18772:9090'
+  jaeger:
+    image: cr.jaegertracing.io/jaegertracing/jaeger:2.23.0
+    ports:
+      - '127.0.0.1:18773:16686'
