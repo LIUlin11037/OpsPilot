@@ -286,6 +286,8 @@ HTTP 健康诊断可以从同一服务的 Prometheus 查询补充错误率和 p9
 
 用 `--incident-start` 和 `--incident-end` 查看过去同一时段的指标和服务日志，并同时获取当前 HTTP 观测。[故障时段调查](docs/v1.2-incident-window.md)
 
+用 `compare-incident BEFORE_ID AFTER_ID` 离线对比两个历史调查，分别核对当前端点、历史异常、同源证据与覆盖缺口。 [用法与隔离验收](docs/v1.8-incident-window-comparison.md)
+
 Traefik 隔离示例提供完整的首次配置、故障对照和历史复查步骤。[跨项目接入指南](docs/v1.3-independent-traefik.md)
 
 ## 只读查询 RabbitMQ 队列
