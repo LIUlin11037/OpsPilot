@@ -288,6 +288,8 @@ HTTP 健康诊断可以从同一服务的 Prometheus 查询补充错误率和 p9
 
 用 `compare-incident BEFORE_ID AFTER_ID` 离线对比两个历史调查，分别核对当前端点、历史异常、同源证据与覆盖缺口。 [用法与隔离验收](docs/v1.8-incident-window-comparison.md)
 
+原版 Caddy 网关与上游已通过独立接入验收，关联了真实访问日志、Prometheus 指标和 Jaeger 追踪。 [接入指南](docs/first-caddy-onboarding.md) · [验收与复现](docs/v1.9-caddy-onboarding-acceptance.md)
+
 Traefik 隔离示例提供完整的首次配置、故障对照和历史复查步骤。[跨项目接入指南](docs/v1.3-independent-traefik.md)
 
 ## 只读查询 RabbitMQ 队列
